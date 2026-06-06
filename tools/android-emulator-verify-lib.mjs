@@ -14,7 +14,14 @@ const frameMagic = 0x44575343;
 const wireVersion = 1;
 const messageTypeSessionHello = 0x0001;
 const messageTypeSessionHelloAck = 0x0002;
+const messageTypeVideoConfig = 0x0201;
+const messageTypeVideoFrame = 0x0202;
+const messageTypeControlSystem = 0x0304;
+const messageTypeLogRecord = 0x0401;
 const streamIdSession = 1;
+const streamIdVideo = 3;
+const streamIdControl = 4;
+const streamIdLog = 5;
 const helloSequence = 1n;
 
 export async function runAndroidEmulatorVerification(options = {}) {
@@ -47,7 +54,7 @@ export async function runAndroidEmulatorVerification(options = {}) {
         "app_process",
         "/",
         "dev.droidwebscr.server.MainKt",
-        "--hello-once",
+        "--verify-once",
         socketName,
       ],
       { background: true },
@@ -59,9 +66,9 @@ export async function runAndroidEmulatorVerification(options = {}) {
       `localabstract:${socketName}`,
     ]);
     forwardedPort = parseForwardedPort(forward.stdout);
-    await verifyHelloRoundTrip(connectTcpSocket, forwardedPort);
+    const productVerification = await verifyProductRoundTrip(connectTcpSocket, forwardedPort);
 
-    return { forwardedPort, serial };
+    return { forwardedPort, serial, ...productVerification };
   } catch (error) {
     const output = server?.output?.();
     if (output && (output.stdout || output.stderr)) {
@@ -89,6 +96,61 @@ async function verifyHelloRoundTrip(connectTcpSocket, forwardedPort) {
   return verifyHelloRoundTripAttempt(connectTcpSocket, forwardedPort, deadline);
 }
 
+async function verifyProductRoundTrip(connectTcpSocket, forwardedPort) {
+  const socket = await verifyHelloRoundTrip(connectTcpSocket, forwardedPort);
+  try {
+    const videoConfig = await withTimeout(
+      socket.readFrame(),
+      5_000,
+      "Timed out waiting for VIDEO_CONFIG from Android server.",
+    );
+    assertFrame(videoConfig, {
+      messageType: messageTypeVideoConfig,
+      minPayloadLength: 16,
+      streamId: streamIdVideo,
+    });
+
+    const videoFrame = await withTimeout(
+      socket.readFrame(),
+      5_000,
+      "Timed out waiting for VIDEO_FRAME from Android server.",
+    );
+    assertFrame(videoFrame, {
+      messageType: messageTypeVideoFrame,
+      minPayloadLength: 1,
+      streamId: streamIdVideo,
+    });
+
+    await withTimeout(
+      socket.writeFrame(createControlSystemFrame()),
+      1_000,
+      "Timed out writing CONTROL_SYSTEM.",
+    );
+    const logFrame = await withTimeout(
+      socket.readFrame(),
+      5_000,
+      "Timed out waiting for control LOG_RECORD from Android server.",
+    );
+    assertFrame(logFrame, {
+      messageType: messageTypeLogRecord,
+      minPayloadLength: 1,
+      streamId: streamIdLog,
+    });
+    const logText = new TextDecoder().decode(payloadBytes(logFrame));
+    if (!logText.includes("Accepted")) {
+      throw new Error(`Android control operation was not accepted: ${logText}`);
+    }
+
+    return {
+      controlLogBytes: framePayloadLength(logFrame),
+      videoConfigBytes: framePayloadLength(videoConfig),
+      videoFrameBytes: framePayloadLength(videoFrame),
+    };
+  } finally {
+    await socket.close();
+  }
+}
+
 async function verifyHelloRoundTripAttempt(connectTcpSocket, forwardedPort, deadline, lastError) {
   if (Date.now() >= deadline) {
     throw lastError ?? new Error("Timed out verifying SESSION_HELLO_ACK from Android server.");
@@ -112,7 +174,7 @@ async function verifyHelloRoundTripAttempt(connectTcpSocket, forwardedPort, dead
       "Timed out waiting for SESSION_HELLO_ACK from Android server.",
     );
     assertHelloAck(response);
-    await socket.close();
+    return socket;
   } catch (error) {
     await socket?.close();
     await delay(100);
@@ -148,6 +210,10 @@ async function readExactly(socket, length, chunks = [], total = 0) {
     return output;
   }
 
+  if (socket.destroyed || socket.closed) {
+    throw new Error("Socket closed before a complete frame arrived.");
+  }
+
   const chunk = socket.read(length - total);
   if (chunk) {
     return readExactly(socket, length, [...chunks, chunk], total + chunk.byteLength);
@@ -160,23 +226,59 @@ export function createHelloAckFrame() {
   return createFrame(messageTypeSessionHelloAck, helloSequence);
 }
 
+export function createVideoConfigFrame() {
+  const payload = new Uint8Array(17);
+  payload[0] = 1;
+  payload[1] = 1;
+  payload[15] = 1;
+  payload[16] = 0x67;
+  return createFrame(messageTypeVideoConfig, 2n, {
+    payload,
+    streamId: streamIdVideo,
+  });
+}
+
+export function createVideoFrame() {
+  return createFrame(messageTypeVideoFrame, 3n, {
+    flags: 1,
+    payload: new Uint8Array([0, 0, 0, 1, 0x65]),
+    streamId: streamIdVideo,
+  });
+}
+
+export function createLogFrame() {
+  return createFrame(messageTypeLogRecord, 4n, {
+    payload: new TextEncoder().encode("control:home:Accepted"),
+    streamId: streamIdLog,
+  });
+}
+
 function createHelloFrame() {
   return createFrame(messageTypeSessionHello, helloSequence);
 }
 
-function createFrame(type, sequence) {
-  const output = new Uint8Array(frameHeaderLength);
+function createControlSystemFrame() {
+  return createFrame(messageTypeControlSystem, 2n, {
+    payload: new Uint8Array([1]),
+    streamId: streamIdControl,
+  });
+}
+
+function createFrame(type, sequence, options = {}) {
+  const payload = options.payload ?? new Uint8Array(0);
+  const output = new Uint8Array(frameHeaderLength + payload.byteLength);
   const view = new DataView(output.buffer);
   view.setUint32(0, frameMagic, false);
   view.setUint16(4, wireVersion, false);
   view.setUint16(6, frameHeaderLength, false);
   view.setUint16(8, type, false);
-  view.setUint16(10, 0, false);
-  view.setUint32(12, streamIdSession, false);
-  view.setUint32(16, 0, false);
+  view.setUint16(10, options.flags ?? 0, false);
+  view.setUint32(12, options.streamId ?? streamIdSession, false);
+  view.setUint32(16, payload.byteLength, false);
   view.setBigUint64(20, 0n, false);
   view.setBigUint64(28, sequence, false);
   view.setUint32(36, 0, false);
+  output.set(payload, frameHeaderLength);
   return output;
 }
 
@@ -213,6 +315,45 @@ function assertHelloAck(frame) {
   if (view.getUint32(36, false) !== 0) {
     throw new Error("SESSION_HELLO_ACK frame had non-zero reserved bits.");
   }
+}
+
+function assertFrame(frame, expectation) {
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  if (bytes.byteLength < frameHeaderLength + expectation.minPayloadLength) {
+    throw new Error(
+      `Frame length was ${bytes.byteLength}, expected at least ${frameHeaderLength + expectation.minPayloadLength}.`,
+    );
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (view.getUint32(0, false) !== frameMagic) {
+    throw new Error("Frame had invalid magic.");
+  }
+  if (view.getUint16(4, false) !== wireVersion) {
+    throw new Error("Frame had unsupported wire version.");
+  }
+  if (view.getUint16(6, false) !== frameHeaderLength) {
+    throw new Error("Frame had unsupported header length.");
+  }
+  if (view.getUint16(8, false) !== expectation.messageType) {
+    throw new Error(`Unexpected message type ${view.getUint16(8, false)}.`);
+  }
+  if (view.getUint32(12, false) !== expectation.streamId) {
+    throw new Error(`Unexpected stream id ${view.getUint32(12, false)}.`);
+  }
+  if (view.getUint32(16, false) < expectation.minPayloadLength) {
+    throw new Error("Frame payload was shorter than expected.");
+  }
+}
+
+function framePayloadLength(frame) {
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(16, false);
+}
+
+function payloadBytes(frame) {
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  return bytes.slice(frameHeaderLength);
 }
 
 async function listOnlineEmulators(runner, adbPath) {
@@ -331,14 +472,32 @@ async function readProtocolFrame(socket) {
 
 function onceReadable(socket) {
   return new Promise((resolveReadable, rejectReadable) => {
-    socket.once("readable", resolveReadable);
-    socket.once("error", rejectReadable);
-    socket.once("end", () =>
-      rejectReadable(new Error("Socket ended before a complete frame arrived.")),
-    );
-    socket.once("close", () =>
-      rejectReadable(new Error("Socket closed before a complete frame arrived.")),
-    );
+    const cleanup = () => {
+      socket.off("readable", onReadable);
+      socket.off("error", onError);
+      socket.off("end", onEnd);
+      socket.off("close", onClose);
+    };
+    const onReadable = () => {
+      cleanup();
+      resolveReadable();
+    };
+    const onError = (error) => {
+      cleanup();
+      rejectReadable(error);
+    };
+    const onEnd = () => {
+      cleanup();
+      rejectReadable(new Error("Socket ended before a complete frame arrived."));
+    };
+    const onClose = () => {
+      cleanup();
+      resolveReadable();
+    };
+    socket.once("readable", onReadable);
+    socket.once("error", onError);
+    socket.once("end", onEnd);
+    socket.once("close", onClose);
   });
 }
 

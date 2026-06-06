@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   createHelloAckFrame,
+  createLogFrame,
+  createVideoConfigFrame,
+  createVideoFrame,
   runAndroidEmulatorVerification,
 } from "./android-emulator-verify-lib.mjs";
 
@@ -60,7 +63,7 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
           "app_process",
           "/",
           "dev.droidwebscr.server.MainKt",
-          "--hello-once",
+          "--verify-once",
           "droid-webscr",
         ),
         pid: 321,
@@ -72,10 +75,16 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
     calls,
   );
 
+  const frames = [
+    createHelloAckFrame(),
+    createVideoConfigFrame(),
+    createVideoFrame(),
+    createLogFrame(),
+  ];
   const sockets = [
     {
       close: async () => calls.push({ kind: "socket.close" }),
-      readFrame: async () => createHelloAckFrame(),
+      readFrame: async () => frames.shift(),
       writeFrame: async (frame) => calls.push({ frame, kind: "socket.writeFrame" }),
     },
   ];
@@ -100,9 +109,10 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
       "build",
       "-s emulator-5554 shell rm -f /data/local/tmp/droid-webscr-server.jar",
       "-s emulator-5554 push android/server/build/droid-webscr-server-android.jar /data/local/tmp/droid-webscr-server.jar",
-      "-s emulator-5554 shell CLASSPATH=/data/local/tmp/droid-webscr-server.jar app_process / dev.droidwebscr.server.MainKt --hello-once droid-webscr",
+      "-s emulator-5554 shell CLASSPATH=/data/local/tmp/droid-webscr-server.jar app_process / dev.droidwebscr.server.MainKt --verify-once droid-webscr",
       "-s emulator-5554 forward tcp:0 localabstract:droid-webscr",
       "connect",
+      "socket.writeFrame",
       "socket.writeFrame",
       "socket.close",
       "-s emulator-5554 forward --remove tcp:41001",

@@ -2,5 +2,5 @@ import { runAndroidEmulatorVerification } from "./android-emulator-verify-lib.mj
 
 const result = await runAndroidEmulatorVerification();
 console.log(
-  `android:emulator:verify completed HELLO round trip with ${result.serial} on tcp:${result.forwardedPort}.`,
+  `android:emulator:verify completed HELLO, video, and control verification with ${result.serial} on tcp:${result.forwardedPort}.`,
 );

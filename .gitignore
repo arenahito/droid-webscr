@@ -1,0 +1,73 @@
+# TypeScript / Node
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.turbo/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/*
+!.yarn/patches/
+!.yarn/plugins/
+!.yarn/releases/
+!.yarn/sdks/
+!.yarn/versions/
+
+# Kotlin / Gradle
+.gradle/
+**/build/
+!src/**/build/
+gradle-app.setting
+!gradle-wrapper.jar
+
+# Android / IntelliJ
+.idea/
+*.iml
+local.properties
+.externalNativeBuild/
+.cxx/
+captures/
+output.json
+.navigation/
+.settings/
+lint/intermediates/
+lint/generated/
+lint/outputs/
+
+# Android build outputs and signing
+*.apk
+*.ap_
+*.aab
+*.aar
+*.dex
+*.hprof
+*.keystore
+*.jks
+keystore.properties
+
+# JVM / Kotlin build artifacts
+*.class
+*.jar
+*.war
+*.ear
+*.kotlin_module
+
+# Logs and local environment
+*.log
+.env
+.env.*
+!.env.example
+!.env.sample
+.tasks/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -5,7 +5,15 @@ import { StreamId } from "./streams.js";
 
 export type PointerControlAction = "down" | "move" | "up" | "cancel";
 export type KeyControlAction = "down" | "up";
-export type SystemControlAction = "back" | "home";
+export type SystemControlAction =
+  | "back"
+  | "home"
+  | "overview"
+  | "volume-up"
+  | "volume-down"
+  | "power"
+  | "keyboard";
+export type ClipboardControlAction = "set" | "get";
 
 export interface ControlFrameOptions {
   readonly sequence?: bigint | undefined;
@@ -31,6 +39,11 @@ export interface KeyControlPayloadInput extends ControlFrameOptions {
 
 export interface TextControlPayloadInput extends ControlFrameOptions {
   readonly text: string;
+}
+
+export interface ClipboardControlPayloadInput extends ControlFrameOptions {
+  readonly action: ClipboardControlAction;
+  readonly text?: string | undefined;
 }
 
 export function createPointerControlFrame(input: PointerControlPayloadInput): Uint8Array {
@@ -66,9 +79,17 @@ export function createSystemControlFrame(
 ): Uint8Array {
   return createControlFrame(
     MessageType.ControlSystem,
-    new Uint8Array([action === "back" ? 0 : 1]),
+    new Uint8Array([encodeSystemAction(action)]),
     options,
   );
+}
+
+export function createClipboardControlFrame(input: ClipboardControlPayloadInput): Uint8Array {
+  const text = new TextEncoder().encode(input.text ?? "");
+  const payload = new Uint8Array(1 + text.byteLength);
+  payload[0] = input.action === "set" ? 0 : 1;
+  payload.set(text, 1);
+  return createControlFrame(MessageType.ControlClipboard, payload, input);
 }
 
 function createControlFrame(
@@ -98,6 +119,25 @@ function encodePointerAction(action: PointerControlAction): number {
       return 2;
     case "cancel":
       return 3;
+  }
+}
+
+function encodeSystemAction(action: SystemControlAction): number {
+  switch (action) {
+    case "back":
+      return 0;
+    case "home":
+      return 1;
+    case "overview":
+      return 2;
+    case "volume-up":
+      return 3;
+    case "volume-down":
+      return 4;
+    case "power":
+      return 5;
+    case "keyboard":
+      return 6;
   }
 }
 

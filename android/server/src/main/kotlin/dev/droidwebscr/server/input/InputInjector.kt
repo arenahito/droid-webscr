@@ -76,12 +76,22 @@ data class TextControlMessage(
 
 enum class SystemAction {
     Back,
-    Home;
+    Home,
+    Overview,
+    VolumeUp,
+    VolumeDown,
+    Power,
+    Keyboard;
 
     companion object {
         fun requireSupported(value: String): SystemAction = when (value.lowercase()) {
             "back" -> Back
             "home" -> Home
+            "overview" -> Overview
+            "volume-up" -> VolumeUp
+            "volume-down" -> VolumeDown
+            "power" -> Power
+            "keyboard" -> Keyboard
             else -> throw IllegalArgumentException("Unsupported system action: $value.")
         }
     }
@@ -120,6 +130,11 @@ class ShellInputInjector(
         val keyCode = when (action) {
             SystemAction.Back -> KEYCODE_BACK
             SystemAction.Home -> KEYCODE_HOME
+            SystemAction.Overview -> KEYCODE_APP_SWITCH
+            SystemAction.VolumeUp -> KEYCODE_VOLUME_UP
+            SystemAction.VolumeDown -> KEYCODE_VOLUME_DOWN
+            SystemAction.Power -> KEYCODE_POWER
+            SystemAction.Keyboard -> KEYCODE_MENU
         }
         return runCatching {
             val downAccepted = adapter.injectKey(KeyControlMessage(KeyAction.Down, keyCode, 0, 0))
@@ -144,5 +159,10 @@ class ShellInputInjector(
     private companion object {
         const val KEYCODE_BACK = 4
         const val KEYCODE_HOME = 3
+        const val KEYCODE_APP_SWITCH = 187
+        const val KEYCODE_VOLUME_UP = 24
+        const val KEYCODE_VOLUME_DOWN = 25
+        const val KEYCODE_POWER = 26
+        const val KEYCODE_MENU = 82
     }
 }

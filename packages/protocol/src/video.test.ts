@@ -3,7 +3,12 @@ import { createFrameHeader } from "./frame.js";
 import { decodeFrame, encodeFrame } from "./codec.js";
 import { MessageType } from "./messages.js";
 import { StreamId } from "./streams.js";
-import { parseVideoConfigFrame, parseVideoFrame } from "./video.js";
+import {
+  createVideoReconfigureFrame,
+  parseVideoConfigFrame,
+  parseVideoFrame,
+  parseVideoReconfigureFrame,
+} from "./video.js";
 
 describe("video protocol payload helpers", () => {
   it("parses AVC config metadata and codec config bytes", () => {
@@ -33,30 +38,15 @@ describe("video protocol payload helpers", () => {
     });
   });
 
-  it("parses video reconfigure frames with the same config payload shape", () => {
-    const payload = new Uint8Array(16);
-    const view = new DataView(payload.buffer);
-    view.setUint8(0, 1);
-    view.setUint32(4, 1280, false);
-    view.setUint32(8, 720, false);
-    view.setUint32(12, 0, false);
+  it("creates and parses video reconfigure frames", () => {
     const frame = parseDecoded(
-      encodeFrame({
-        header: createFrameHeader({
-          payloadLength: payload.byteLength,
-          streamId: StreamId.Video,
-          type: MessageType.VideoReconfigure,
-        }),
-        payload,
-      }),
+      createVideoReconfigureFrame({ bitrateMbps: 12, fps: 60, sequence: 7n }),
     );
 
-    expect(parseVideoConfigFrame(frame)).toEqual({
-      codedHeight: 720,
-      codedWidth: 1280,
-      codec: "avc1.42E01E",
-      codecConfig: new Uint8Array(),
-    });
+    expect(frame.header.type).toBe(MessageType.VideoReconfigure);
+    expect(frame.header.streamId).toBe(StreamId.Video);
+    expect(frame.header.sequence).toBe(7n);
+    expect(parseVideoReconfigureFrame(frame)).toEqual({ bitrateMbps: 12, fps: 60 });
   });
 
   it("parses video frame timestamp and keyframe flag", () => {

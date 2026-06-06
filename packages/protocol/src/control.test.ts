@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeFrame } from "./codec.js";
 import {
+  createClipboardControlFrame,
   createKeyControlFrame,
   createPointerControlFrame,
   createSystemControlFrame,
@@ -36,7 +37,7 @@ describe("control protocol payload helpers", () => {
     ]);
   });
 
-  it("encodes key text and system control frames", () => {
+  it("encodes key text system and clipboard control frames", () => {
     const key = decodeFrame(
       createKeyControlFrame({
         action: "up",
@@ -47,6 +48,11 @@ describe("control protocol payload helpers", () => {
     );
     const text = decodeFrame(createTextControlFrame({ text: "Hi" }));
     const system = decodeFrame(createSystemControlFrame("home"));
+    const overview = decodeFrame(createSystemControlFrame("overview"));
+    const volumeUp = decodeFrame(createSystemControlFrame("volume-up"));
+    const power = decodeFrame(createSystemControlFrame("power"));
+    const clipboardSet = decodeFrame(createClipboardControlFrame({ action: "set", text: "Hi" }));
+    const clipboardGet = decodeFrame(createClipboardControlFrame({ action: "get" }));
 
     expect(key.ok && key.value.header.type).toBe(MessageType.ControlKey);
     expect(key.ok && [...key.value.payload]).toEqual([1, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 2]);
@@ -54,6 +60,12 @@ describe("control protocol payload helpers", () => {
     expect(text.ok && new TextDecoder().decode(text.value.payload)).toBe("Hi");
     expect(system.ok && system.value.header.type).toBe(MessageType.ControlSystem);
     expect(system.ok && [...system.value.payload]).toEqual([1]);
+    expect(overview.ok && [...overview.value.payload]).toEqual([2]);
+    expect(volumeUp.ok && [...volumeUp.value.payload]).toEqual([3]);
+    expect(power.ok && [...power.value.payload]).toEqual([5]);
+    expect(clipboardSet.ok && clipboardSet.value.header.type).toBe(MessageType.ControlClipboard);
+    expect(clipboardSet.ok && [...clipboardSet.value.payload]).toEqual([0, 72, 105]);
+    expect(clipboardGet.ok && [...clipboardGet.value.payload]).toEqual([1]);
   });
 
   it("encodes cancel and back variants with timestamp metadata", () => {

@@ -41,7 +41,9 @@ export interface AdbSocket {
 }
 
 export interface AdbProvider {
+  connectEndpoint?(endpoint: string): Promise<void>;
   connect(serial: string): Promise<AdbDeviceSession>;
+  disconnect?(serial: string): Promise<void>;
   listDevices(): Promise<AdbDeviceDescriptor[]>;
 }
 

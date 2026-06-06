@@ -36,6 +36,9 @@ class InputValidationTest {
             TextControlMessage("x".repeat(1025)).validated()
         }
         assertEquals(SystemAction.Back, SystemAction.requireSupported("back"))
+        assertEquals(SystemAction.Overview, SystemAction.requireSupported("overview"))
+        assertEquals(SystemAction.VolumeUp, SystemAction.requireSupported("volume-up"))
+        assertEquals(SystemAction.Power, SystemAction.requireSupported("power"))
         assertFailsWith<IllegalArgumentException> {
             SystemAction.requireSupported("recents")
         }
@@ -48,6 +51,20 @@ class InputValidationTest {
 
         assertEquals(InjectionResult.Accepted, injector.injectSystemAction(SystemAction.Home))
         assertEquals(listOf("key:Down:3", "key:Up:3"), adapter.events)
+    }
+
+    @Test
+    fun `shell injector maps extended system actions to Android keycodes`() {
+        val adapter = RecordingInputEventAdapter()
+        val injector = ShellInputInjector(adapter, InputDisplayBounds(1080, 2400))
+
+        assertEquals(InjectionResult.Accepted, injector.injectSystemAction(SystemAction.Overview))
+        assertEquals(InjectionResult.Accepted, injector.injectSystemAction(SystemAction.VolumeUp))
+        assertEquals(InjectionResult.Accepted, injector.injectSystemAction(SystemAction.Power))
+        assertEquals(
+            listOf("key:Down:187", "key:Up:187", "key:Down:24", "key:Up:24", "key:Down:26", "key:Up:26"),
+            adapter.events,
+        )
     }
 
     private class RecordingInputEventAdapter : InputEventAdapter {

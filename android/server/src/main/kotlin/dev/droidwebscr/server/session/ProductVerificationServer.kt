@@ -11,7 +11,6 @@ import dev.droidwebscr.server.codec.VideoProtocol
 import dev.droidwebscr.server.input.InputDisplayBounds
 import dev.droidwebscr.server.input.InputInjector
 import dev.droidwebscr.server.input.ShellInputInjector
-import dev.droidwebscr.server.input.SystemAction
 import dev.droidwebscr.server.protocol.Frame
 import dev.droidwebscr.server.protocol.FrameCodec
 import dev.droidwebscr.server.protocol.FrameHeader
@@ -57,19 +56,6 @@ class ProductVerificationServer(
         )
 
         val config = VideoEncoderConfig(width = 720, height = 1280, bitrate = 2_000_000, fps = 30).validated()
-        emitMediaCodecVideoFrames(output, config)
-
-        val control = readFrame(input)
-        val action = parseSystemAction(control).getOrElse { error ->
-            writeLog(output, "control:rejected:${error.message}")
-            return
-        }
-        val inputInjector = inputInjectorFactory(InputDisplayBounds(config.width, config.height))
-        val result = inputInjector.injectSystemAction(action)
-        writeLog(output, "control:${action.name.lowercase()}:$result")
-    }
-
-    private fun emitMediaCodecVideoFrames(output: OutputStream, config: VideoEncoderConfig) {
         encoder.start(config)
         val captureSession = captureBackend.start(
             CaptureConfig(displayId = 0, width = config.width, height = config.height),
@@ -77,6 +63,12 @@ class ProductVerificationServer(
         )
         try {
             emitFirstEncodedFrames(output, config)
+            val dispatcher = ControlFrameDispatcher(
+                bounds = InputDisplayBounds(config.width, config.height),
+                inputInjector = inputInjectorFactory(InputDisplayBounds(config.width, config.height)),
+                reconfigureVideo = { nextConfig -> encoder.reconfigure(nextConfig) },
+            )
+            readAndDispatchControls(input, output, dispatcher)
         } finally {
             captureSession.stop()
             encoder.stop()
@@ -106,18 +98,20 @@ class ProductVerificationServer(
         require(frameSent) { "MediaCodec did not emit VIDEO_FRAME before timeout." }
     }
 
-    private fun parseSystemAction(control: Frame): Result<SystemAction> = runCatching {
-        require(control.header.type == MessageType.CONTROL_SYSTEM.value) {
-            "Expected CONTROL_SYSTEM, received message type ${control.header.type}."
-        }
-        require(control.header.streamId == StreamId.Control.value) {
-            "CONTROL_SYSTEM must use the control stream."
-        }
-        require(control.payload.size == 1) { "CONTROL_SYSTEM payload must contain exactly one action byte." }
-        when (control.payload[0].toInt()) {
-            0 -> SystemAction.Back
-            1 -> SystemAction.Home
-            else -> throw IllegalArgumentException("Unsupported CONTROL_SYSTEM action ${control.payload[0].toInt()}.")
+    private fun readAndDispatchControls(
+        input: InputStream,
+        output: OutputStream,
+        dispatcher: ControlFrameDispatcher,
+    ) {
+        while (true) {
+            val frame = try {
+                readFrame(input)
+            } catch (_: EOFException) {
+                return
+            }
+            val log = runCatching { dispatcher.dispatch(frame) }
+                .getOrElse { error -> "control:rejected:${error.message}" }
+            writeLog(output, log)
         }
     }
 

@@ -32,6 +32,54 @@ describe("HTTP agent client", () => {
     );
   });
 
+  it("calls device lifecycle runtime and share endpoints", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/config")) {
+        return jsonResponse({ bindHost: "127.0.0.1", clipboardEnabled: true, port: 7391 });
+      }
+      if (url.endsWith("/api/share-url")) {
+        return jsonResponse({ url: "http://127.0.0.1:7391" });
+      }
+      if (url.endsWith("/api/devices/scan")) {
+        return jsonResponse({
+          devices: [{ authorizationState: "authorized", serial: "emulator-5554" }],
+        });
+      }
+      return jsonResponse({ message: "ok", ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createHttpAgentClient("http://127.0.0.1:7391");
+
+    await expect(client.getRuntimeConfig?.()).resolves.toEqual({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: true,
+      port: 7391,
+    });
+    await expect(client.shareUrl?.()).resolves.toEqual({ url: "http://127.0.0.1:7391" });
+    await expect(client.scanDevices?.()).resolves.toEqual([
+      { authorizationState: "authorized", serial: "emulator-5554" },
+    ]);
+    await expect(client.connectEndpoint?.("192.168.1.40:5555")).resolves.toEqual({
+      message: "ok",
+      ok: true,
+    });
+    await expect(client.renameDevice?.("emulator-5554", "Pixel Lab")).resolves.toEqual({
+      message: "ok",
+      ok: true,
+    });
+    await expect(client.disconnectDevice?.("emulator-5554")).resolves.toEqual({
+      message: "ok",
+      ok: true,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:7391/api/devices/emulator-5554/rename",
+      expect.objectContaining({
+        body: JSON.stringify({ alias: "Pixel Lab" }),
+        method: "POST",
+      }),
+    );
+  });
+
   it("sends bearer auth when configured for non-local agents", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/devices")) {

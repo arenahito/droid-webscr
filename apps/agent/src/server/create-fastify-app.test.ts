@@ -155,6 +155,105 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("exposes runtime config share URL and device lifecycle operations", async () => {
+    const context = testContext({
+      authToken: "secret",
+      bindHost: "0.0.0.0",
+      clipboard: { enabled: true },
+      port: 7391,
+    });
+    const connectedEndpoints: string[] = [];
+    const disconnectedSerials: string[] = [];
+    const adbProvider = context.adbProvider as typeof context.adbProvider & {
+      connectEndpoint(endpoint: string): Promise<void>;
+      disconnect(serial: string): Promise<void>;
+    };
+    adbProvider.connectEndpoint = async (endpoint) => {
+      connectedEndpoints.push(endpoint);
+    };
+    adbProvider.disconnect = async (serial) => {
+      disconnectedSerials.push(serial);
+    };
+    const app = await createFastifyApp(context);
+    const headers = { authorization: "Bearer secret" };
+
+    await expect(app.inject({ headers, method: "GET", url: "/api/config" })).resolves.toMatchObject(
+      {
+        statusCode: 200,
+      },
+    );
+    expect((await app.inject({ headers, method: "GET", url: "/api/config" })).json()).toEqual({
+      bindHost: "0.0.0.0",
+      clipboardEnabled: true,
+      port: 7391,
+    });
+    expect((await app.inject({ headers, method: "GET", url: "/api/share-url" })).json()).toEqual({
+      url: "http://0.0.0.0:7391",
+    });
+    expect(
+      (
+        await app.inject({
+          headers,
+          method: "POST",
+          payload: { endpoint: "192.168.1.40:5555" },
+          url: "/api/devices/connect",
+        })
+      ).json(),
+    ).toEqual({ message: "Endpoint 192.168.1.40:5555 connected", ok: true });
+    expect(
+      (
+        await app.inject({
+          headers,
+          method: "POST",
+          payload: { alias: "Pixel Lab" },
+          url: "/api/devices/emulator-5554/rename",
+        })
+      ).json(),
+    ).toEqual({ message: "Device emulator-5554 renamed", ok: true });
+    expect(
+      (await app.inject({ headers, method: "POST", url: "/api/devices/scan" })).json(),
+    ).toEqual({
+      devices: [
+        {
+          authorizationState: "authorized",
+          model: "Pixel Lab",
+          serial: "emulator-5554",
+          transportKind: "emulator",
+        },
+      ],
+    });
+    expect(
+      (
+        await app.inject({
+          headers,
+          method: "POST",
+          url: "/api/devices/emulator-5554/disconnect",
+        })
+      ).json(),
+    ).toEqual({ message: "Device emulator-5554 disconnected", ok: true });
+    expect(connectedEndpoints).toEqual(["192.168.1.40:5555"]);
+    expect(disconnectedSerials).toEqual(["emulator-5554"]);
+    await app.close();
+  });
+
+  it("validates lifecycle operation payloads", async () => {
+    const app = await createFastifyApp(testContext());
+
+    expect(
+      (await app.inject({ method: "POST", payload: {}, url: "/api/devices/connect" })).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          payload: {},
+          url: "/api/devices/emulator-5554/rename",
+        })
+      ).statusCode,
+    ).toBe(400);
+    await app.close();
+  });
+
   it("creates short-lived device-bound sessions", async () => {
     const app = await createFastifyApp(testContext());
 

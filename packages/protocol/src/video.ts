@@ -1,4 +1,6 @@
 import { ProtocolFrame } from "./codec.js";
+import { createFrameHeader } from "./frame.js";
+import { encodeFrame } from "./codec.js";
 import { MessageType } from "./messages.js";
 import { StreamId } from "./streams.js";
 
@@ -15,6 +17,49 @@ export interface VideoFramePayload {
   readonly data: Uint8Array;
   readonly keyFrame: boolean;
   readonly timestampUs: bigint;
+}
+
+export interface VideoReconfigureInput {
+  readonly bitrateMbps: number;
+  readonly fps: number;
+  readonly sequence?: bigint | undefined;
+}
+
+export interface VideoReconfigurePayload {
+  readonly bitrateMbps: number;
+  readonly fps: number;
+}
+
+export function createVideoReconfigureFrame(input: VideoReconfigureInput): Uint8Array {
+  const payload = new Uint8Array(8);
+  const view = new DataView(payload.buffer);
+  view.setUint32(0, input.bitrateMbps, false);
+  view.setUint32(4, input.fps, false);
+  return encodeFrame({
+    header: createFrameHeader({
+      payloadLength: payload.byteLength,
+      streamId: StreamId.Video,
+      type: MessageType.VideoReconfigure,
+      ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
+    }),
+    payload,
+  });
+}
+
+export function parseVideoReconfigureFrame(frame: ProtocolFrame): VideoReconfigurePayload {
+  requireFrame(frame, MessageType.VideoReconfigure);
+  if (frame.payload.byteLength !== 8) {
+    throw new Error("VIDEO_RECONFIGURE payload must be 8 bytes.");
+  }
+  const view = new DataView(
+    frame.payload.buffer,
+    frame.payload.byteOffset,
+    frame.payload.byteLength,
+  );
+  return {
+    bitrateMbps: view.getUint32(0, false),
+    fps: view.getUint32(4, false),
+  };
 }
 
 export function parseVideoConfigFrame(frame: ProtocolFrame): VideoConfigPayload {

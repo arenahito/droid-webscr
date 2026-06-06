@@ -16,7 +16,12 @@ const messageTypeSessionHello = 0x0001;
 const messageTypeSessionHelloAck = 0x0002;
 const messageTypeVideoConfig = 0x0201;
 const messageTypeVideoFrame = 0x0202;
+const messageTypeVideoReconfigure = 0x0203;
+const messageTypeControlPointer = 0x0301;
+const messageTypeControlKey = 0x0302;
+const messageTypeControlText = 0x0303;
 const messageTypeControlSystem = 0x0304;
+const messageTypeControlClipboard = 0x0305;
 const messageTypeLogRecord = 0x0401;
 const streamIdSession = 1;
 const streamIdVideo = 3;
@@ -121,28 +126,25 @@ async function verifyProductRoundTrip(connectTcpSocket, forwardedPort) {
       streamId: streamIdVideo,
     });
 
-    await withTimeout(
-      socket.writeFrame(createControlSystemFrame()),
-      1_000,
-      "Timed out writing CONTROL_SYSTEM.",
-    );
-    const logFrame = await withTimeout(
-      socket.readFrame(),
-      5_000,
-      "Timed out waiting for control LOG_RECORD from Android server.",
-    );
-    assertFrame(logFrame, {
-      messageType: messageTypeLogRecord,
-      minPayloadLength: 1,
-      streamId: streamIdLog,
-    });
-    const logText = new TextDecoder().decode(payloadBytes(logFrame));
-    if (!logText.includes("Accepted")) {
-      throw new Error(`Android control operation was not accepted: ${logText}`);
-    }
+    const controlFrames = [
+      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame() },
+      { expectation: "control:key:Accepted", frame: createControlKeyFrame() },
+      { expectation: "control:text:Accepted", frame: createControlTextFrame("hello") },
+      { expectation: "control:home:Accepted", frame: createControlSystemFrame() },
+      {
+        expectation: "clipboard:set:Rejected(Clipboard sync is disabled by policy.)",
+        frame: createControlClipboardFrame(),
+      },
+      { expectation: "video:reconfigure:Accepted", frame: createVideoReconfigureFrame() },
+    ];
+    const controlLogs = await verifyControlFrames(socket, controlFrames);
 
     return {
-      controlLogBytes: framePayloadLength(logFrame),
+      controlLogBytes: controlLogs.reduce(
+        (total, logText) => total + new TextEncoder().encode(logText).byteLength,
+        0,
+      ),
+      controlLogs,
       videoConfigBytes: framePayloadLength(videoConfig),
       videoFrameBytes: framePayloadLength(videoFrame),
     };
@@ -246,9 +248,13 @@ export function createVideoFrame() {
   });
 }
 
-export function createLogFrame() {
+export function createLogFrame(text = "control:home:Accepted") {
+  return createLogFrameWithText(text);
+}
+
+function createLogFrameWithText(text) {
   return createFrame(messageTypeLogRecord, 4n, {
-    payload: new TextEncoder().encode("control:home:Accepted"),
+    payload: new TextEncoder().encode(text),
     streamId: streamIdLog,
   });
 }
@@ -262,6 +268,52 @@ function createControlSystemFrame() {
     payload: new Uint8Array([1]),
     streamId: streamIdControl,
   });
+}
+
+function createControlPointerFrame() {
+  const payload = new Uint8Array(20);
+  const view = new DataView(payload.buffer);
+  view.setUint8(0, 0);
+  view.setUint16(2, 1, false);
+  view.setUint32(4, 24, false);
+  view.setUint32(8, 48, false);
+  view.setUint8(12, 255);
+  view.setUint16(14, 1, false);
+  view.setUint32(16, 0, false);
+  return createFrame(messageTypeControlPointer, 3n, { payload, streamId: streamIdControl });
+}
+
+function createControlKeyFrame() {
+  const payload = new Uint8Array(12);
+  const view = new DataView(payload.buffer);
+  view.setUint8(0, 0);
+  view.setUint16(2, 66, false);
+  view.setUint32(4, 0, false);
+  view.setUint32(8, 0, false);
+  return createFrame(messageTypeControlKey, 4n, { payload, streamId: streamIdControl });
+}
+
+function createControlTextFrame(text) {
+  return createFrame(messageTypeControlText, 5n, {
+    payload: new TextEncoder().encode(text),
+    streamId: streamIdControl,
+  });
+}
+
+function createControlClipboardFrame() {
+  const text = new TextEncoder().encode("blocked");
+  const payload = new Uint8Array(1 + text.byteLength);
+  payload[0] = 0;
+  payload.set(text, 1);
+  return createFrame(messageTypeControlClipboard, 7n, { payload, streamId: streamIdControl });
+}
+
+function createVideoReconfigureFrame() {
+  const payload = new Uint8Array(8);
+  const view = new DataView(payload.buffer);
+  view.setUint32(0, 4, false);
+  view.setUint32(4, 45, false);
+  return createFrame(messageTypeVideoReconfigure, 8n, { payload, streamId: streamIdVideo });
 }
 
 function createFrame(type, sequence, options = {}) {
@@ -354,6 +406,35 @@ function framePayloadLength(frame) {
 function payloadBytes(frame) {
   const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
   return bytes.slice(frameHeaderLength);
+}
+
+async function readLogText(socket, expectation = "control") {
+  const logFrame = await withTimeout(
+    socket.readFrame(),
+    5_000,
+    `Timed out waiting for ${expectation} LOG_RECORD from Android server.`,
+  );
+  assertFrame(logFrame, {
+    messageType: messageTypeLogRecord,
+    minPayloadLength: 1,
+    streamId: streamIdLog,
+  });
+  return new TextDecoder().decode(payloadBytes(logFrame));
+}
+
+async function verifyControlFrames(socket, controlFrames, index = 0, logs = []) {
+  if (index >= controlFrames.length) {
+    return logs;
+  }
+  const { expectation, frame } = controlFrames[index];
+  await withTimeout(socket.writeFrame(frame), 1_000, `Timed out writing ${expectation}.`);
+  const logText = await readLogText(socket, expectation);
+  if (logText !== expectation) {
+    throw new Error(
+      `Android control operation mismatch: expected "${expectation}", got "${logText}".`,
+    );
+  }
+  return verifyControlFrames(socket, controlFrames, index + 1, [...logs, logText]);
 }
 
 async function listOnlineEmulators(runner, adbPath) {

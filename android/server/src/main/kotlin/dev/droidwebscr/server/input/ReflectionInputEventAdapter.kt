@@ -1,5 +1,7 @@
 package dev.droidwebscr.server.input
 
+import java.util.concurrent.TimeUnit
+
 class ReflectionInputEventAdapter : InputEventAdapter {
     override fun injectKey(event: KeyControlMessage): Boolean {
         val validated = event.validated()
@@ -7,7 +9,13 @@ class ReflectionInputEventAdapter : InputEventAdapter {
             KeyAction.Down -> ACTION_DOWN
             KeyAction.Up -> ACTION_UP
         }
-        return inject(createKeyEvent(action, validated.keyCode, validated.metaState, validated.repeat))
+        val reflected = inject(
+            setEventSource(createKeyEvent(action, validated.keyCode, validated.metaState, validated.repeat), SOURCE_KEYBOARD),
+        )
+        return reflected || when (validated.action) {
+            KeyAction.Down -> injectShell("keyevent", validated.keyCode.toString())
+            KeyAction.Up -> true
+        }
     }
 
     override fun injectPointer(event: PointerControlMessage): Boolean {
@@ -17,12 +25,29 @@ class ReflectionInputEventAdapter : InputEventAdapter {
             PointerAction.Up -> MOTION_ACTION_UP
             PointerAction.Cancel -> MOTION_ACTION_CANCEL
         }
-        return inject(createMotionEvent(action, event.x.toFloat(), event.y.toFloat(), event.pressure))
+        val reflected = inject(
+            setEventSource(
+                createMotionEvent(action, event.x.toFloat(), event.y.toFloat(), event.pressure),
+                SOURCE_TOUCHSCREEN,
+            ),
+        )
+        return reflected || injectPointerWithShell(event)
     }
 
     override fun injectText(text: String): Boolean {
         TextControlMessage(text).validated()
-        return false
+        val keyCharacterMapClass = Class.forName("android.view.KeyCharacterMap")
+        val virtualKeyboard = keyCharacterMapClass.getField("VIRTUAL_KEYBOARD").getInt(null)
+        val keyCharacterMap = requireNotNull(
+            keyCharacterMapClass.getMethod("load", Int::class.javaPrimitiveType)
+                .invoke(null, virtualKeyboard),
+        )
+        val events = keyCharacterMapClass
+            .getMethod("getEvents", CharArray::class.java)
+            .invoke(keyCharacterMap, text.toCharArray()) as? Array<*>
+            ?: return false
+        val reflected = events.isNotEmpty() && events.all { event -> inject(requireNotNull(event)) }
+        return reflected || injectShell("text", text.replace(" ", "%s"))
     }
 
     private fun inject(event: Any): Boolean {
@@ -78,6 +103,28 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         ).invoke(null, now, now, action, x, y, pressure, 1.0f, 0, 1.0f, 1.0f, 0, 0))
     }
 
+    private fun setEventSource(event: Any, source: Int): Any {
+        event.javaClass.getMethod("setSource", Int::class.javaPrimitiveType).invoke(event, source)
+        return event
+    }
+
+    private fun injectPointerWithShell(event: PointerControlMessage): Boolean = when (event.action) {
+        PointerAction.Down -> injectShell("tap", event.x.toString(), event.y.toString())
+        PointerAction.Move -> injectShell("swipe", event.x.toString(), event.y.toString(), event.x.toString(), event.y.toString(), "1")
+        PointerAction.Up,
+        PointerAction.Cancel,
+        -> true
+    }
+
+    private fun injectShell(vararg args: String): Boolean = runCatching {
+        val process = ProcessBuilder("/system/bin/input", *args).redirectErrorStream(true).start()
+        if (!process.waitFor(2, TimeUnit.SECONDS)) {
+            process.destroyForcibly()
+            return@runCatching false
+        }
+        process.exitValue() == 0
+    }.getOrDefault(false)
+
     private companion object {
         const val ACTION_DOWN = 0
         const val ACTION_UP = 1
@@ -86,5 +133,7 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         const val MOTION_ACTION_MOVE = 2
         const val MOTION_ACTION_CANCEL = 3
         const val INJECT_INPUT_EVENT_MODE_ASYNC = 0
+        const val SOURCE_KEYBOARD = 0x00000101
+        const val SOURCE_TOUCHSCREEN = 0x00001002
     }
 }

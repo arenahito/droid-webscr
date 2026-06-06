@@ -25,6 +25,16 @@ export class SystemAdbProvider implements AdbProvider {
     return new SystemAdbDeviceSession(this.adbPath, serial);
   }
 
+  /* v8 ignore next 3 -- external adb process boundary */
+  public async connectEndpoint(endpoint: string): Promise<void> {
+    await runAndCollect(this.adbPath, ["connect", endpoint]);
+  }
+
+  /* v8 ignore next 3 -- external adb process boundary */
+  public async disconnect(serial: string): Promise<void> {
+    await runAndCollect(this.adbPath, ["disconnect", serial]);
+  }
+
   public static parseDevices(output: string): AdbDeviceDescriptor[] {
     return output
       .split(/\r?\n/)

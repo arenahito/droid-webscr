@@ -79,7 +79,12 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
     createHelloAckFrame(),
     createVideoConfigFrame(),
     createVideoFrame(),
-    createLogFrame(),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:key:Accepted"),
+    createLogFrame("control:text:Accepted"),
+    createLogFrame("control:home:Accepted"),
+    createLogFrame("clipboard:set:Rejected(Clipboard sync is disabled by policy.)"),
+    createLogFrame("video:reconfigure:Accepted"),
   ];
   const sockets = [
     {
@@ -114,11 +119,24 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
       "connect",
       "socket.writeFrame",
       "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
       "socket.close",
       "-s emulator-5554 forward --remove tcp:41001",
       "-s emulator-5554 shell rm -f /data/local/tmp/droid-webscr-server.jar",
     ],
   );
+  assert.deepEqual(result.controlLogs, [
+    "control:pointer:Accepted",
+    "control:key:Accepted",
+    "control:text:Accepted",
+    "control:home:Accepted",
+    "clipboard:set:Rejected(Clipboard sync is disabled by policy.)",
+    "video:reconfigure:Accepted",
+  ]);
 });
 
 function fakeRunner(script, calls = []) {

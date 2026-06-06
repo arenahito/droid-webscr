@@ -1,0 +1,32 @@
+{
+  "name": "droid-webscr",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "check": "pnpm format:check && pnpm lint && pnpm type-check && pnpm test",
+    "lint": "oxlint --config oxlint.json . --deny-warnings",
+    "lint-fix": "oxlint --fix --config oxlint.json . --deny-warnings",
+    "format": "oxfmt --config oxfmt.json --write .",
+    "format:check": "oxfmt --config oxfmt.json --check .",
+    "type-check": "turbo type-check",
+    "typecheck": "pnpm type-check",
+    "test": "vitest run --config vitest.workspace.ts && node --test tools/workspace-foundation.test.mjs",
+    "test:coverage": "vitest run --coverage --config vitest.workspace.ts",
+    "android:build": "node tools/android-gradle.mjs build",
+    "android:check": "node tools/android-gradle.mjs check",
+    "android:emulator:verify": "node tools/android-emulator-verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.3",
+    "@vitest/coverage-v8": "4.1.8",
+    "oxfmt": "0.53.0",
+    "oxlint": "1.68.0",
+    "turbo": "2.9.16",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
+  },
+  "packageManager": "pnpm@11.5.2"
+}

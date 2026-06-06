@@ -1,0 +1,16 @@
+{
+  "name": "@droid-webscr/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "lint": "oxlint --config ../../oxlint.json src",
+    "test": "vitest run",
+    "type-check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@droid-webscr/config": "workspace:*"
+  }
+}

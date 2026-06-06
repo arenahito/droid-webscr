@@ -42,6 +42,38 @@ describe("video pipeline", () => {
     });
   });
 
+  it("resets and reconfigures the decoder from VIDEO_RECONFIGURE", async () => {
+    const adapter = new RecordingVideoDecoderAdapter();
+    const pipeline = createVideoPipeline({ createDecoder: () => adapter });
+
+    await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, [], MessageType.VideoReconfigure));
+
+    expect(adapter.resetCount).toBe(1);
+    expect(adapter.configs.map((config) => [config.codedWidth, config.codedHeight])).toEqual([
+      [720, 1280],
+      [1280, 720],
+    ]);
+    expect(pipeline.snapshot().videoSize).toEqual({ height: 720, width: 1280 });
+  });
+
+  it("clears stale decoder state when VIDEO_RECONFIGURE fails", async () => {
+    const adapter = new RecordingVideoDecoderAdapter();
+    const pipeline = createVideoPipeline({ createDecoder: () => adapter });
+
+    await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    adapter.failNextConfigure = new Error("reconfigure failed");
+    await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, [], MessageType.VideoReconfigure));
+
+    expect(adapter.resetCount).toBe(1);
+    expect(pipeline.snapshot()).toMatchObject({
+      configured: false,
+      lastError: "reconfigure failed",
+      status: "error",
+      videoSize: undefined,
+    });
+  });
+
   it("bounds decode pressure and avoids unbounded queued chunks", async () => {
     const adapter = new RecordingVideoDecoderAdapter();
     adapter.decodeQueueSize = 2;
@@ -162,6 +194,7 @@ class RecordingVideoDecoderAdapter implements VideoDecoderAdapter {
   public readonly configs: VideoDecoderConfig[] = [];
   public closeCount = 0;
   public decodeQueueSize = 0;
+  public failNextConfigure: Error | undefined;
   public resetCount = 0;
 
   public close(): void {
@@ -169,6 +202,11 @@ class RecordingVideoDecoderAdapter implements VideoDecoderAdapter {
   }
 
   public configure(config: VideoDecoderConfig): void {
+    if (this.failNextConfigure) {
+      const error = this.failNextConfigure;
+      this.failNextConfigure = undefined;
+      throw error;
+    }
     this.configs.push(config);
   }
 
@@ -185,7 +223,12 @@ class RecordingVideoDecoderAdapter implements VideoDecoderAdapter {
   }
 }
 
-function createVideoConfigFrame(width: number, height: number, configBytes: readonly number[]) {
+function createVideoConfigFrame(
+  width: number,
+  height: number,
+  configBytes: readonly number[],
+  type: MessageType.VideoConfig | MessageType.VideoReconfigure = MessageType.VideoConfig,
+) {
   const actualConfigBytes =
     configBytes.length === 0 ? [0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1e] : configBytes;
   const payload = new Uint8Array(16 + actualConfigBytes.length);
@@ -200,7 +243,7 @@ function createVideoConfigFrame(width: number, height: number, configBytes: read
     header: createFrameHeader({
       payloadLength: payload.byteLength,
       streamId: StreamId.Video,
-      type: MessageType.VideoConfig,
+      type,
     }),
     payload,
   });

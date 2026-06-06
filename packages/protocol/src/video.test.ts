@@ -33,6 +33,32 @@ describe("video protocol payload helpers", () => {
     });
   });
 
+  it("parses video reconfigure frames with the same config payload shape", () => {
+    const payload = new Uint8Array(16);
+    const view = new DataView(payload.buffer);
+    view.setUint8(0, 1);
+    view.setUint32(4, 1280, false);
+    view.setUint32(8, 720, false);
+    view.setUint32(12, 0, false);
+    const frame = parseDecoded(
+      encodeFrame({
+        header: createFrameHeader({
+          payloadLength: payload.byteLength,
+          streamId: StreamId.Video,
+          type: MessageType.VideoReconfigure,
+        }),
+        payload,
+      }),
+    );
+
+    expect(parseVideoConfigFrame(frame)).toEqual({
+      codedHeight: 720,
+      codedWidth: 1280,
+      codec: "avc1.42E01E",
+      codecConfig: new Uint8Array(),
+    });
+  });
+
   it("parses video frame timestamp and keyframe flag", () => {
     const bytes = encodeFrame({
       header: createFrameHeader({
@@ -113,6 +139,24 @@ describe("video protocol payload helpers", () => {
         payload: new Uint8Array(),
       }),
     ).toThrow("Expected message type");
+    expect(() =>
+      parseVideoConfigFrame({
+        header: createFrameHeader({
+          streamId: StreamId.Video,
+          type: MessageType.VideoFrame,
+        }),
+        payload: new Uint8Array(16),
+      }),
+    ).toThrow("Expected message type");
+    expect(() =>
+      parseVideoConfigFrame({
+        header: createFrameHeader({
+          streamId: StreamId.Session,
+          type: MessageType.VideoConfig,
+        }),
+        payload: new Uint8Array(16),
+      }),
+    ).toThrow("Expected video stream");
   });
 });
 

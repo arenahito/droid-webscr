@@ -1,6 +1,6 @@
 import websocket from "@fastify/websocket";
 import { AdbProvider } from "@droid-webscr/adb";
-import { AgentConfig } from "@droid-webscr/config";
+import { AgentConfig, validateAgentConfig } from "@droid-webscr/config";
 import Fastify from "fastify";
 import { DeviceServer, AdbDeviceServer } from "../device-server/start.js";
 import { isAllowedHost, isAllowedOrigin } from "../security/origin.js";
@@ -26,6 +26,11 @@ export function createLoggerOptions(enabled: boolean | undefined) {
 }
 
 export async function createFastifyApp(context: AgentAppContext) {
+  const configValidation = validateAgentConfig(context.config);
+  if (!configValidation.ok) {
+    throw configValidation.error;
+  }
+
   const app = Fastify({
     logger: createLoggerOptions(context.logger),
   });
@@ -37,6 +42,8 @@ export async function createFastifyApp(context: AgentAppContext) {
 
   const sessionManager = new SessionManager(context.adbProvider);
   const deviceServer = context.deviceServer ?? new AdbDeviceServer(context.adbProvider);
+  const activeBrowserSessions = new Set<string>();
+  const activeDeviceSerials = new Set<string>();
 
   registerRoutes(app, {
     ...context,
@@ -58,13 +65,21 @@ export async function createFastifyApp(context: AgentAppContext) {
           await reply.code(403).send({ error: "Invalid host" });
           return;
         }
-        if (!isAllowedOrigin(request.headers.origin, context.config)) {
+        if (!isAllowedOrigin(request.headers.origin, context.config, request.headers.host)) {
           await reply.code(403).send({ error: "Invalid origin" });
           return;
         }
         const record = sessionManager.verify(params.sessionId, query.token);
         if (!record) {
           await reply.code(401).send({ error: "Invalid token" });
+          return;
+        }
+        if (
+          activeBrowserSessions.has(params.sessionId) ||
+          activeDeviceSerials.has(record.deviceSerial)
+        ) {
+          await reply.code(409).send({ error: "Session already connected" });
+          return;
         }
       },
       websocket: true,
@@ -78,8 +93,21 @@ export async function createFastifyApp(context: AgentAppContext) {
         socket.close(1008, "Invalid token");
         return;
       }
-      const deviceSession = await deviceServer.start(record.deviceSerial);
-      bridgeBrowserToDevice(socket, deviceSession);
+      activeBrowserSessions.add(params.sessionId);
+      activeDeviceSerials.add(record.deviceSerial);
+      const release = () => {
+        activeBrowserSessions.delete(params.sessionId);
+        activeDeviceSerials.delete(record.deviceSerial);
+      };
+      socket.on("close", release);
+      socket.on("error", release);
+      try {
+        const deviceSession = await deviceServer.start(record.deviceSerial);
+        bridgeBrowserToDevice(socket, deviceSession);
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
   );
 

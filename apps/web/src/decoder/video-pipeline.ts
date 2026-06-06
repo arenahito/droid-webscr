@@ -96,11 +96,19 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
       }
 
       try {
-        if (decoded.value.header.type === MessageType.VideoConfig) {
+        if (
+          decoded.value.header.type === MessageType.VideoConfig ||
+          decoded.value.header.type === MessageType.VideoReconfigure
+        ) {
           const config = parseVideoConfigFrame(decoded.value);
           const activeDecoder = getDecoder();
           if (!activeDecoder) {
             return snapshot();
+          }
+          if (configured && decoded.value.header.type === MessageType.VideoReconfigure) {
+            activeDecoder.reset();
+            configured = false;
+            videoSize = undefined;
           }
           await activeDecoder.configure({
             ...createWebCodecsH264Config({

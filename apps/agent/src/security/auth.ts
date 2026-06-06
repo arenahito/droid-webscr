@@ -1,4 +1,5 @@
 import { SessionTokenRecord, isTokenExpired } from "./session-token.js";
+import { AgentConfig } from "@droid-webscr/config";
 
 export function validateSessionToken(
   record: SessionTokenRecord | undefined,
@@ -6,4 +7,15 @@ export function validateSessionToken(
   nowMs: number,
 ): boolean {
   return Boolean(record && token && record.token === token && !isTokenExpired(record, nowMs));
+}
+
+export function validateAgentAuthHeader(
+  authorization: string | string[] | undefined,
+  config: AgentConfig,
+): boolean {
+  if (!config.authToken) {
+    return true;
+  }
+  const values = Array.isArray(authorization) ? authorization : [authorization];
+  return values.some((value) => value === `Bearer ${config.authToken}`);
 }

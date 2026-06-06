@@ -18,7 +18,7 @@ export interface VideoFramePayload {
 }
 
 export function parseVideoConfigFrame(frame: ProtocolFrame): VideoConfigPayload {
-  requireFrame(frame, MessageType.VideoConfig);
+  requireVideoConfigFrame(frame);
   if (frame.payload.byteLength < 16) {
     throw new Error("VIDEO_CONFIG payload is shorter than 16 bytes.");
   }
@@ -46,6 +46,20 @@ export function parseVideoConfigFrame(frame: ProtocolFrame): VideoConfigPayload 
     codec: "avc1.42E01E",
     codecConfig: frame.payload.slice(16),
   };
+}
+
+function requireVideoConfigFrame(frame: ProtocolFrame): void {
+  if (
+    frame.header.type !== MessageType.VideoConfig &&
+    frame.header.type !== MessageType.VideoReconfigure
+  ) {
+    throw new Error(
+      `Expected message type ${MessageType.VideoConfig}, received ${frame.header.type}.`,
+    );
+  }
+  if (frame.header.streamId !== StreamId.Video) {
+    throw new Error(`Expected video stream, received stream ${frame.header.streamId}.`);
+  }
 }
 
 export function parseVideoFrame(frame: ProtocolFrame): VideoFramePayload {

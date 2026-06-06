@@ -15,10 +15,12 @@ export type SessionAction =
   | { readonly serial: string; readonly type: "select-device" }
   | { readonly type: "start-requested" }
   | { readonly session: SessionRecord; readonly type: "start-succeeded" }
-  | { readonly message: string; readonly type: "failed" }
+  | { readonly domain?: ErrorDomain | undefined; readonly message: string; readonly type: "failed" }
   | { readonly message: string; readonly type: "log" }
   | { readonly type: "stop" }
   | { readonly type: "clear-logs" };
+
+export type ErrorDomain = "agent" | "android" | "network" | "protocol" | "security" | "unknown";
 
 export function reduceSessionState(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
@@ -35,7 +37,11 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
         session: action.session,
       };
     case "failed":
-      return { ...state, logs: [...state.logs, action.message], phase: "error" };
+      return {
+        ...state,
+        logs: [...state.logs, formatSessionError(action.domain, action.message)],
+        phase: "error",
+      };
     case "log":
       return { ...state, logs: [...state.logs, action.message] };
     case "stop":
@@ -48,4 +54,11 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
     case "clear-logs":
       return { ...state, logs: [] };
   }
+}
+
+function formatSessionError(domain: ErrorDomain | undefined, message: string): string {
+  if (!domain || domain === "unknown") {
+    return message;
+  }
+  return `${domain[0]!.toUpperCase()}${domain.slice(1)} error: ${message}`;
 }

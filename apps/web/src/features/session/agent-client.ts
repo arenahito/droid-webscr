@@ -6,12 +6,20 @@ export interface AgentClient {
   listDevices(): Promise<readonly DeviceDescriptor[]>;
 }
 
-export function createHttpAgentClient(baseUrl = ""): AgentClient {
+export interface HttpAgentClientOptions {
+  readonly authToken?: string | undefined;
+  readonly baseUrl?: string | undefined;
+}
+
+export function createHttpAgentClient(options: HttpAgentClientOptions | string = ""): AgentClient {
+  const baseUrl = typeof options === "string" ? options : (options.baseUrl ?? "");
+  const authToken = typeof options === "string" ? undefined : options.authToken;
+  const headers = createAgentHeaders(authToken);
   return {
     createSession: async (serial) => {
       const response = await fetch(`${baseUrl}/api/sessions`, {
         body: JSON.stringify({ serial }),
-        headers: { "content-type": "application/json" },
+        headers: { ...headers, "content-type": "application/json" },
         method: "POST",
       });
       if (!response.ok) {
@@ -20,7 +28,7 @@ export function createHttpAgentClient(baseUrl = ""): AgentClient {
       return (await response.json()) as SessionRecord;
     },
     listDevices: async () => {
-      const response = await fetch(`${baseUrl}/api/devices`);
+      const response = await fetch(`${baseUrl}/api/devices`, { headers });
       if (!response.ok) {
         throw new Error(`Device listing failed with HTTP ${response.status}`);
       }
@@ -31,4 +39,8 @@ export function createHttpAgentClient(baseUrl = ""): AgentClient {
       return body.devices;
     },
   };
+}
+
+function createAgentHeaders(authToken: string | undefined): HeadersInit {
+  return authToken ? { authorization: `Bearer ${authToken}` } : {};
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeAdbProvider } from "@droid-webscr/adb";
 import { AdbAuthorizationState, AdbTransportKind } from "@droid-webscr/adb";
+import { AgentConfig } from "@droid-webscr/config";
 import { createFrameHeader, encodeFrame, MessageType, StreamId } from "@droid-webscr/protocol";
 import {
   createFastifyApp,
@@ -44,6 +45,95 @@ describe("agent server", () => {
     const response = await app.inject({ method: "GET", url: "/api/health" });
 
     expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects non-local runtime bind without auth", async () => {
+    await expect(
+      createFastifyApp(
+        testContext({
+          authToken: undefined,
+          bindHost: "0.0.0.0",
+          clipboard: { enabled: false },
+          port: 7391,
+        }),
+      ),
+    ).rejects.toThrow("Non-local bind addresses require authToken.");
+
+    const app = await createFastifyApp(
+      testContext({
+        authToken: "secret",
+        bindHost: "0.0.0.0",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+    const response = await app.inject({ method: "GET", url: "/api/health" });
+    const devicesWithoutAuth = await app.inject({ method: "GET", url: "/api/devices" });
+    const createWithoutAuth = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const createWithAuth = await app.inject({
+      headers: { authorization: "Bearer secret" },
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(devicesWithoutAuth.statusCode).toBe(401);
+    expect(createWithoutAuth.statusCode).toBe(401);
+    expect(createWithAuth.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("keeps origin checks independent from configured agent auth", async () => {
+    const context = testContext({
+      authToken: "secret",
+      bindHost: "0.0.0.0",
+      clipboard: { enabled: false },
+      port: 7391,
+    });
+    const app = await createFastifyApp(context);
+    const created = await app.inject({
+      headers: { authorization: "Bearer secret" },
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+
+    await expect(
+      app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+        headers: {
+          authorization: "Bearer secret",
+          host: "192.168.1.20:7391",
+          origin: "http://evil.example",
+          "sec-websocket-protocol": binaryWebSocketProtocol,
+        },
+      }),
+    ).rejects.toThrow("Unexpected server response: 403");
+    await expect(
+      app.injectWS(`/ws/session/${session.sessionId}?token=bad`, {
+        headers: {
+          host: "192.168.1.20:7391",
+          origin: "http://192.168.1.20:7391",
+          "sec-websocket-protocol": binaryWebSocketProtocol,
+        },
+      }),
+    ).rejects.toThrow("Unexpected server response: 401");
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        authorization: "Bearer secret",
+        host: "192.168.1.20:7391",
+        origin: "http://192.168.1.20:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    ws.terminate();
+
     await app.close();
   });
 
@@ -186,9 +276,100 @@ describe("agent server", () => {
     expect(context.deviceServer.stopCalls).toEqual(["emulator-5554"]);
     await app.close();
   });
+
+  it("rejects duplicate active browser connections but allows reconnect after close", async () => {
+    const context = testContext();
+    const app = await createFastifyApp(context);
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const headers = {
+      host: "127.0.0.1:7391",
+      origin: "http://127.0.0.1:7391",
+      "sec-websocket-protocol": binaryWebSocketProtocol,
+    };
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers,
+    });
+
+    await expect(
+      app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, { headers }),
+    ).rejects.toThrow("Unexpected server response: 409");
+
+    ws.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reconnected = await app.injectWS(
+      `/ws/session/${session.sessionId}?token=${session.token}`,
+      { headers },
+    );
+    reconnected.terminate();
+
+    expect(context.deviceServer.startedSerials).toEqual(["emulator-5554", "emulator-5554"]);
+    await app.close();
+  });
+
+  it("releases active browser session state when device start fails", async () => {
+    const context = testContext();
+    const startedSerials: string[] = [];
+    const app = await createFastifyApp({
+      ...context,
+      deviceServer: {
+        async start(serial) {
+          startedSerials.push(serial);
+          throw new Error("device start failed");
+        },
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const headers = {
+      host: "127.0.0.1:7391",
+      origin: "http://127.0.0.1:7391",
+      "sec-websocket-protocol": binaryWebSocketProtocol,
+    };
+
+    const failed = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers,
+    });
+    await waitForWebSocketClose(failed);
+    const retried = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers,
+    });
+    await waitForWebSocketClose(retried);
+
+    expect(startedSerials).toEqual(["emulator-5554", "emulator-5554"]);
+
+    await app.close();
+  });
 });
 
-function testContext() {
+async function waitForWebSocketClose(ws: {
+  once: (event: "close", listener: () => void) => void;
+  readyState: number;
+}) {
+  if (ws.readyState === 3) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    ws.once("close", resolve);
+  });
+}
+
+function testContext(
+  config: AgentConfig = {
+    authToken: undefined,
+    bindHost: "127.0.0.1",
+    clipboard: { enabled: false },
+    port: 7391,
+  },
+) {
   const adbProvider = new FakeAdbProvider([
     {
       authorizationState: AdbAuthorizationState.Authorized,
@@ -198,6 +379,7 @@ function testContext() {
   ]);
   const stopCalls: string[] = [];
   const writes: Uint8Array[] = [];
+  const startedSerials: string[] = [];
   const deviceFrames: Uint8Array[] = [];
   let pendingDeviceFrame: (() => void) | undefined;
   const nextDeviceFrame = async () => {
@@ -211,13 +393,9 @@ function testContext() {
   };
   return {
     adbProvider,
-    config: {
-      authToken: undefined,
-      bindHost: "127.0.0.1",
-      clipboard: { enabled: false },
-      port: 7391,
-    },
+    config,
     deviceServer: {
+      startedSerials,
       stopCalls,
       writes,
       pushFromDevice(frame: Uint8Array) {
@@ -225,6 +403,7 @@ function testContext() {
         pendingDeviceFrame?.();
       },
       async start(serial: string) {
+        startedSerials.push(serial);
         return {
           frames: (async function* (): AsyncIterable<Uint8Array> {
             yield await nextDeviceFrame();

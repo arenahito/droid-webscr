@@ -26,4 +26,14 @@ describe("session state", () => {
     expect(logged.logs.at(-1)).toBe("Decode pressure detected");
     expect(stopped).toMatchObject({ phase: "idle", selectedSerial: "emulator-5554" });
   });
+
+  it("maps typed error domains to stable user-facing log text", () => {
+    const failed = reduceSessionState(
+      { logs: [], phase: "connected", selectedSerial: "emulator-5554", session: undefined },
+      { domain: "security", message: "Invalid origin", type: "failed" },
+    );
+
+    expect(failed.phase).toBe("error");
+    expect(failed.logs).toEqual(["Security error: Invalid origin"]);
+  });
 });

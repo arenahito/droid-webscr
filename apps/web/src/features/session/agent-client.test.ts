@@ -32,6 +32,48 @@ describe("HTTP agent client", () => {
     );
   });
 
+  it("sends bearer auth when configured for non-local agents", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/devices")) {
+        return jsonResponse({ devices: [] });
+      }
+      return jsonResponse({ serial: "emulator-5554", sessionId: "s1", token: "t1" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createHttpAgentClient({
+      authToken: "secret",
+      baseUrl: "http://192.168.1.20:7391",
+    });
+
+    await client.listDevices();
+    await client.createSession("emulator-5554");
+
+    expect(fetchMock).toHaveBeenCalledWith("http://192.168.1.20:7391/api/devices", {
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://192.168.1.20:7391/api/sessions",
+      expect.objectContaining({
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+      }),
+    );
+  });
+
+  it("supports authenticated same-origin agent requests", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ devices: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createHttpAgentClient({ authToken: "secret" });
+
+    await client.listDevices();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/devices", {
+      headers: { authorization: "Bearer secret" },
+    });
+  });
+
   it("throws clear errors for failed agent responses", async () => {
     vi.stubGlobal(
       "fetch",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isAllowedHost, isAllowedOrigin } from "./origin.js";
 import { createSessionToken, isTokenExpired } from "./session-token.js";
-import { validateSessionToken } from "./auth.js";
+import { validateAgentAuthHeader, validateSessionToken } from "./auth.js";
 
 const localConfig = {
   authToken: undefined,
@@ -14,7 +14,9 @@ describe("agent security helpers", () => {
   it("handles invalid origins and host policy branches", () => {
     expect(isAllowedOrigin(undefined, localConfig)).toBe(true);
     expect(isAllowedOrigin("not a url", localConfig)).toBe(false);
+    expect(isAllowedOrigin("http://localhost:7391", localConfig)).toBe(true);
     expect(isAllowedHost(undefined, localConfig)).toBe(false);
+    expect(isAllowedHost("", localConfig)).toBe(false);
     expect(isAllowedHost("localhost:7391", localConfig)).toBe(true);
     expect(isAllowedHost("evil.example", localConfig)).toBe(false);
     expect(
@@ -25,10 +27,32 @@ describe("agent security helpers", () => {
       }),
     ).toBe(true);
     expect(
+      isAllowedOrigin(
+        "http://evil.example",
+        {
+          ...localConfig,
+          authToken: "secret",
+          bindHost: "0.0.0.0",
+        },
+        "192.168.1.20:7391",
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedOrigin(
+        "http://192.168.1.20:7391",
+        {
+          ...localConfig,
+          authToken: "secret",
+          bindHost: "0.0.0.0",
+        },
+        "192.168.1.20:7391",
+      ),
+    ).toBe(true);
+    expect(
       isAllowedHost("other.example", {
         ...localConfig,
         authToken: undefined,
-        bindHost: "0.0.0.0",
+        bindHost: "192.168.1.20",
       }),
     ).toBe(false);
   });
@@ -42,5 +66,21 @@ describe("agent security helpers", () => {
     expect(validateSessionToken(record, "bad", 109)).toBe(false);
     expect(validateSessionToken(undefined, record.token, 109)).toBe(false);
     expect(validateSessionToken(record, record.token, 110)).toBe(false);
+  });
+
+  it("requires configured agent bearer auth without weakening local defaults", () => {
+    expect(validateAgentAuthHeader(undefined, localConfig)).toBe(true);
+    expect(validateAgentAuthHeader("Bearer secret", { ...localConfig, authToken: "secret" })).toBe(
+      true,
+    );
+    expect(validateAgentAuthHeader("Bearer wrong", { ...localConfig, authToken: "secret" })).toBe(
+      false,
+    );
+    expect(
+      validateAgentAuthHeader(["Basic secret", "Bearer secret"], {
+        ...localConfig,
+        authToken: "secret",
+      }),
+    ).toBe(true);
   });
 });

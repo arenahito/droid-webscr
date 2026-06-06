@@ -24,6 +24,9 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ProductVerificationServer(
     private val socketName: String,
@@ -41,12 +44,12 @@ class ProductVerificationServer(
     }
 
     private fun serveConnection(input: InputStream, output: OutputStream) {
+        val frameWriter = SessionFrameWriter(output)
         val hello = readFrame(input)
         require(hello.header.type == MessageType.SESSION_HELLO.value) {
             "Expected SESSION_HELLO, received message type ${hello.header.type}."
         }
-        writeFrame(
-            output,
+        frameWriter.writeFrame(
             Frame(
                 FrameHeader(
                     type = MessageType.SESSION_HELLO_ACK.value,
@@ -76,47 +79,34 @@ class ProductVerificationServer(
             ),
             encoder.inputSurface(),
         )
+        val videoStream = VideoStreamPump(
+            encoder = encoder,
+            initialConfig = config,
+            writeFrame = frameWriter::writeFrame,
+        )
         try {
-            emitFirstEncodedFrames(output, config)
+            videoStream.start()
+            require(videoStream.awaitFirstFrame()) { "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout." }
             val dispatcher = ControlFrameDispatcher(
                 bounds = InputDisplayBounds(config.width, config.height),
                 inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
                 inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height)),
-                reconfigureVideo = { nextConfig -> encoder.reconfigure(nextConfig) },
+                reconfigureVideo = { nextConfig ->
+                    encoder.reconfigure(nextConfig)
+                    videoStream.updateConfig(nextConfig)
+                },
             )
-            readAndDispatchControls(input, output, dispatcher)
+            readAndDispatchControls(input, frameWriter, dispatcher)
         } finally {
+            videoStream.stop()
             captureSession.stop()
             encoder.stop()
         }
     }
 
-    private fun emitFirstEncodedFrames(output: OutputStream, config: VideoEncoderConfig) {
-        var sequence = 1uL
-        var configSent = false
-        var frameSent = false
-        val deadline = System.nanoTime() + 5_000_000_000L
-        encoder.requestKeyFrame()
-        while (System.nanoTime() < deadline && (!configSent || !frameSent)) {
-            val packet = encoder.dequeueOutput(100_000) ?: continue
-            if (packet.codecConfig) {
-                writeFrame(output, VideoProtocol.createVideoConfigFrame(config, packet.bytes, sequence++))
-                configSent = true
-            } else {
-                writeFrame(
-                    output,
-                    VideoProtocol.createVideoFrame(packet.bytes, packet.keyFrame, packet.timestampUs, sequence++),
-                )
-                frameSent = true
-            }
-        }
-        require(configSent) { "MediaCodec did not emit VIDEO_CONFIG before timeout." }
-        require(frameSent) { "MediaCodec did not emit VIDEO_FRAME before timeout." }
-    }
-
     private fun readAndDispatchControls(
         input: InputStream,
-        output: OutputStream,
+        frameWriter: SessionFrameWriter,
         dispatcher: ControlFrameDispatcher,
     ) {
         while (true) {
@@ -127,14 +117,13 @@ class ProductVerificationServer(
             }
             val log = runCatching { dispatcher.dispatch(frame) }
                 .getOrElse { error -> "control:rejected:${error.message}" }
-            writeLog(output, log)
+            writeLog(frameWriter, log)
         }
     }
 
-    private fun writeLog(output: OutputStream, message: String) {
+    private fun writeLog(frameWriter: SessionFrameWriter, message: String) {
         val payload = message.encodeToByteArray()
-        writeFrame(
-            output,
+        frameWriter.writeFrame(
             Frame(
                 FrameHeader(
                     type = MessageType.LOG_RECORD.value,
@@ -176,13 +165,73 @@ class ProductVerificationServer(
         }
     }
 
-    private fun writeFrame(output: OutputStream, frame: Frame) {
+    private companion object {
+        const val MAX_PAYLOAD_LENGTH_BYTES = 16 * 1024 * 1024
+    }
+}
+
+internal class SessionFrameWriter(private val output: OutputStream) {
+    @Synchronized
+    fun writeFrame(frame: Frame) {
         output.write(FrameCodec.encode(frame))
         output.flush()
     }
+}
 
-    private companion object {
-        const val MAX_PAYLOAD_LENGTH_BYTES = 16 * 1024 * 1024
+internal class VideoStreamPump(
+    private val encoder: VideoEncoder,
+    initialConfig: VideoEncoderConfig,
+    private val writeFrame: (Frame) -> Unit,
+) {
+    private val running = AtomicBoolean(false)
+    private val firstFrame = CountDownLatch(1)
+    @Volatile
+    private var config = initialConfig
+    private var sequence = 1uL
+    private var configSent = false
+    private var renderedFrameSent = false
+    private var worker: Thread? = null
+
+    fun start() {
+        if (!running.compareAndSet(false, true)) {
+            return
+        }
+        encoder.requestKeyFrame()
+        worker = Thread(::pump, "droid-webscr-video-stream").also { thread ->
+            thread.isDaemon = true
+            thread.start()
+        }
+    }
+
+    fun awaitFirstFrame(timeoutMs: Long = 5_000): Boolean = firstFrame.await(timeoutMs, TimeUnit.MILLISECONDS)
+
+    fun updateConfig(nextConfig: VideoEncoderConfig) {
+        config = nextConfig
+        encoder.requestKeyFrame()
+    }
+
+    fun stop() {
+        running.set(false)
+        worker?.interrupt()
+        worker = null
+    }
+
+    private fun pump() {
+        while (running.get()) {
+            val packet = encoder.dequeueOutput(100_000) ?: continue
+            if (packet.codecConfig) {
+                writeFrame(VideoProtocol.createVideoConfigFrame(config, packet.bytes, sequence++))
+                configSent = true
+            } else {
+                writeFrame(
+                    VideoProtocol.createVideoFrame(packet.bytes, packet.keyFrame, packet.timestampUs, sequence++),
+                )
+                renderedFrameSent = true
+            }
+            if (configSent && renderedFrameSent) {
+                firstFrame.countDown()
+            }
+        }
     }
 }
 

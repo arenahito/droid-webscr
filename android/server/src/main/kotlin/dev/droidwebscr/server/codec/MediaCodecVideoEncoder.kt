@@ -65,8 +65,17 @@ class MediaCodecVideoEncoder : VideoEncoder {
     }
 
     override fun reconfigure(config: VideoEncoderConfig) {
-        stop()
-        start(config)
+        val activeCodec = codec ?: error("Video encoder has not been started.")
+        val current = currentConfig ?: error("Video encoder has not been started.")
+        val validated = config.validated()
+        require(validated.width == current.width && validated.height == current.height) {
+            "Video reconfigure cannot change the active encoder surface size."
+        }
+        val params = Bundle()
+        params.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, validated.bitrate)
+        activeCodec.setParameters(params)
+        currentConfig = validated
+        requestKeyFrame()
     }
 
     override fun stop() {

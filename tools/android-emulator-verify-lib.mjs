@@ -434,23 +434,55 @@ function framePayloadLength(frame) {
   return view.getUint32(16, false);
 }
 
+function frameType(frame) {
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint16(8, false);
+}
+
+function frameStreamId(frame) {
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(12, false);
+}
+
 function payloadBytes(frame) {
   const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
   return bytes.slice(frameHeaderLength);
 }
 
 async function readLogText(socket, expectation = "control") {
-  const logFrame = await withTimeout(
-    socket.readFrame(),
-    5_000,
-    `Timed out waiting for ${expectation} LOG_RECORD from Android server.`,
-  );
-  assertFrame(logFrame, {
+  const logFrame = await readUntilFrame(socket, {
+    description: `${expectation} LOG_RECORD`,
     messageType: messageTypeLogRecord,
-    minPayloadLength: 1,
     streamId: streamIdLog,
   });
+  if (framePayloadLength(logFrame) < 1) {
+    throw new Error("LOG_RECORD payload was shorter than expected.");
+  }
   return new TextDecoder().decode(payloadBytes(logFrame));
+}
+
+async function readUntilFrame(socket, expectation) {
+  const deadline = Date.now() + 5_000;
+  const readNext = async () => {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${expectation.description} from Android server.`);
+    }
+    const frame = await withTimeout(
+      socket.readFrame(),
+      Math.max(1, deadline - Date.now()),
+      `Timed out waiting for ${expectation.description} from Android server.`,
+    );
+    if (
+      frameType(frame) === expectation.messageType &&
+      frameStreamId(frame) === expectation.streamId
+    ) {
+      return frame;
+    }
+    return readNext();
+  };
+  return readNext();
 }
 
 async function verifyControlFrames(socket, controlFrames, index = 0, logs = []) {

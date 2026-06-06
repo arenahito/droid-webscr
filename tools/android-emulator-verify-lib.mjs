@@ -127,8 +127,10 @@ async function verifyProductRoundTrip(connectTcpSocket, forwardedPort) {
     });
 
     const controlFrames = [
-      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame() },
-      { expectation: "control:key:Accepted", frame: createControlKeyFrame() },
+      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame(0, 3n) },
+      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame(2, 4n) },
+      { expectation: "control:key:Accepted", frame: createControlKeyFrame(0, 5n) },
+      { expectation: "control:key:Accepted", frame: createControlKeyFrame(1, 6n) },
       { expectation: "control:text:Accepted", frame: createControlTextFrame("hello") },
       { expectation: "control:home:Accepted", frame: createControlSystemFrame() },
       {
@@ -201,28 +203,57 @@ async function connectWithRetry(port, attemptsRemaining = 40, lastError) {
   }
 }
 
-async function readExactly(socket, length, chunks = [], total = 0) {
-  if (total >= length) {
-    const output = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      output.set(chunk, offset);
-      offset += chunk.byteLength;
+function readExactly(socket, length) {
+  return new Promise((resolveRead, rejectRead) => {
+    const chunks = [];
+    let total = 0;
+    const cleanup = () => {
+      socket.off("readable", readAvailable);
+      socket.off("error", rejectWithError);
+      socket.off("end", rejectClosed);
+      socket.off("close", rejectClosed);
+    };
+    const finish = () => {
+      cleanup();
+      const output = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        output.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      resolveRead(output);
+    };
+    const rejectWithError = (error) => {
+      cleanup();
+      rejectRead(error);
+    };
+    const rejectClosed = () => {
+      cleanup();
+      rejectRead(new Error("Socket closed before a complete frame arrived."));
+    };
+    function readAvailable() {
+      if (socket.destroyed || socket.closed) {
+        rejectClosed();
+        return;
+      }
+      let chunk = socket.read(length - total);
+      while (chunk && chunk.byteLength > 0) {
+        chunks.push(chunk);
+        total += chunk.byteLength;
+        if (total >= length) {
+          finish();
+          return;
+        }
+        chunk = socket.read(length - total);
+      }
     }
-    return output;
-  }
 
-  if (socket.destroyed || socket.closed) {
-    throw new Error("Socket closed before a complete frame arrived.");
-  }
-
-  const chunk = socket.read(length - total);
-  if (chunk) {
-    return readExactly(socket, length, [...chunks, chunk], total + chunk.byteLength);
-  }
-
-  await onceReadable(socket);
-  return readExactly(socket, length, chunks, total);
+    socket.on("readable", readAvailable);
+    socket.once("error", rejectWithError);
+    socket.once("end", rejectClosed);
+    socket.once("close", rejectClosed);
+    readAvailable();
+  });
 }
 export function createHelloAckFrame() {
   return createFrame(messageTypeSessionHelloAck, helloSequence);
@@ -264,37 +295,37 @@ function createHelloFrame() {
 }
 
 function createControlSystemFrame() {
-  return createFrame(messageTypeControlSystem, 2n, {
+  return createFrame(messageTypeControlSystem, 7n, {
     payload: new Uint8Array([1]),
     streamId: streamIdControl,
   });
 }
 
-function createControlPointerFrame() {
+function createControlPointerFrame(action, sequence) {
   const payload = new Uint8Array(20);
   const view = new DataView(payload.buffer);
-  view.setUint8(0, 0);
+  view.setUint8(0, action);
   view.setUint16(2, 1, false);
   view.setUint32(4, 24, false);
   view.setUint32(8, 48, false);
-  view.setUint8(12, 255);
-  view.setUint16(14, 1, false);
+  view.setUint8(12, action === 2 ? 0 : 255);
+  view.setUint16(14, action === 2 ? 0 : 1, false);
   view.setUint32(16, 0, false);
-  return createFrame(messageTypeControlPointer, 3n, { payload, streamId: streamIdControl });
+  return createFrame(messageTypeControlPointer, sequence, { payload, streamId: streamIdControl });
 }
 
-function createControlKeyFrame() {
+function createControlKeyFrame(action, sequence) {
   const payload = new Uint8Array(12);
   const view = new DataView(payload.buffer);
-  view.setUint8(0, 0);
+  view.setUint8(0, action);
   view.setUint16(2, 66, false);
   view.setUint32(4, 0, false);
   view.setUint32(8, 0, false);
-  return createFrame(messageTypeControlKey, 4n, { payload, streamId: streamIdControl });
+  return createFrame(messageTypeControlKey, sequence, { payload, streamId: streamIdControl });
 }
 
 function createControlTextFrame(text) {
-  return createFrame(messageTypeControlText, 5n, {
+  return createFrame(messageTypeControlText, 8n, {
     payload: new TextEncoder().encode(text),
     streamId: streamIdControl,
   });
@@ -305,7 +336,7 @@ function createControlClipboardFrame() {
   const payload = new Uint8Array(1 + text.byteLength);
   payload[0] = 0;
   payload.set(text, 1);
-  return createFrame(messageTypeControlClipboard, 7n, { payload, streamId: streamIdControl });
+  return createFrame(messageTypeControlClipboard, 9n, { payload, streamId: streamIdControl });
 }
 
 function createVideoReconfigureFrame() {
@@ -313,7 +344,7 @@ function createVideoReconfigureFrame() {
   const view = new DataView(payload.buffer);
   view.setUint32(0, 4, false);
   view.setUint32(4, 45, false);
-  return createFrame(messageTypeVideoReconfigure, 8n, { payload, streamId: streamIdVideo });
+  return createFrame(messageTypeVideoReconfigure, 10n, { payload, streamId: streamIdVideo });
 }
 
 function createFrame(type, sequence, options = {}) {
@@ -464,7 +495,7 @@ async function adb(runner, adbPath, serial, args, options = {}) {
   return result;
 }
 
-async function buildAndroidServerArtifact({ artifactPath, runner }) {
+export async function buildAndroidServerArtifact({ artifactPath, runner }) {
   const gradle = await findGradlePath();
   await runChecked(runner, {
     args: ["installDist", "--warning-mode", "fail"],
@@ -551,37 +582,6 @@ async function readProtocolFrame(socket) {
   return frame;
 }
 
-function onceReadable(socket) {
-  return new Promise((resolveReadable, rejectReadable) => {
-    const cleanup = () => {
-      socket.off("readable", onReadable);
-      socket.off("error", onError);
-      socket.off("end", onEnd);
-      socket.off("close", onClose);
-    };
-    const onReadable = () => {
-      cleanup();
-      resolveReadable();
-    };
-    const onError = (error) => {
-      cleanup();
-      rejectReadable(error);
-    };
-    const onEnd = () => {
-      cleanup();
-      rejectReadable(new Error("Socket ended before a complete frame arrived."));
-    };
-    const onClose = () => {
-      cleanup();
-      resolveReadable();
-    };
-    socket.once("readable", onReadable);
-    socket.once("error", onError);
-    socket.once("end", onEnd);
-    socket.once("close", onClose);
-  });
-}
-
 function writeAll(socket, bytes) {
   return new Promise((resolveWrite, rejectWrite) => {
     socket.write(bytes, (error) => {
@@ -594,7 +594,7 @@ function writeAll(socket, bytes) {
   });
 }
 
-function createProcessRunner() {
+export function createProcessRunner() {
   return {
     run: async ({ args, background = false, cwd, executable }) =>
       new Promise((resolveRun) => {
@@ -603,8 +603,8 @@ function createProcessRunner() {
           cwd,
           stdio: ["ignore", "pipe", "pipe"],
         });
-        const stdout = [];
-        const stderr = [];
+        const stdout = createCappedBuffer();
+        const stderr = createCappedBuffer();
         child.stdout.on("data", (chunk) => stdout.push(chunk));
         child.stderr.on("data", (chunk) => stderr.push(chunk));
         child.on("error", (error) => {
@@ -612,15 +612,15 @@ function createProcessRunner() {
             pid: child.pid,
             status: 1,
             stderr: error.message,
-            stdout: Buffer.concat(stdout).toString("utf8"),
+            stdout: stdout.toString(),
           });
         });
 
         if (background) {
           resolveRun({
             output: () => ({
-              stderr: Buffer.concat(stderr).toString("utf8"),
-              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: stderr.toString(),
+              stdout: stdout.toString(),
             }),
             pid: child.pid,
             process: child,
@@ -635,11 +635,29 @@ function createProcessRunner() {
           resolveRun({
             pid: child.pid,
             status: status ?? 1,
-            stderr: Buffer.concat(stderr).toString("utf8"),
-            stdout: Buffer.concat(stdout).toString("utf8"),
+            stderr: stderr.toString(),
+            stdout: stdout.toString(),
           });
         });
       }),
+  };
+}
+
+function createCappedBuffer(maxBytes = 64 * 1024) {
+  const chunks = [];
+  let total = 0;
+  return {
+    push(chunk) {
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      while (total > maxBytes && chunks.length > 0) {
+        const removed = chunks.shift();
+        total -= removed.byteLength;
+      }
+    },
+    toString() {
+      return Buffer.concat(chunks).toString("utf8");
+    },
   };
 }
 

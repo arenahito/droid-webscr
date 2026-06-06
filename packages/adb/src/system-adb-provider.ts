@@ -82,8 +82,13 @@ class SystemAdbDeviceSession implements AdbDeviceSession {
       forward.local,
       forward.remote,
     ]);
-    const socket = await connectLocalPort(localPort);
-    return new ForwardedAdbSocket(this.adbPath, this.serial, forward.local, socket);
+    try {
+      const socket = await connectLocalPortWithRetry(localPort);
+      return new ForwardedAdbSocket(this.adbPath, this.serial, forward.local, socket);
+    } catch (error) {
+      await runAndCollect(this.adbPath, ["-s", this.serial, "forward", "--remove", forward.local]);
+      throw error;
+    }
   }
 
   public async close(): Promise<void> {}
@@ -203,6 +208,28 @@ async function connectLocalPort(port: number): Promise<Socket> {
     socket.once("error", reject);
   });
   return socket;
+}
+
+async function connectLocalPortWithRetry(
+  port: number,
+  attemptsRemaining = 40,
+  lastError?: unknown,
+): Promise<Socket> {
+  if (attemptsRemaining <= 0) {
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Timed out connecting forwarded ADB socket.");
+  }
+  try {
+    return await connectLocalPort(port);
+  } catch (error) {
+    await delay(100);
+    return connectLocalPortWithRetry(port, attemptsRemaining - 1, error);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class ForwardedAdbSocket implements AdbSocket {

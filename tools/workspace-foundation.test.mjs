@@ -54,6 +54,26 @@ test("workspace boundaries match the planned long-lived package layout", async (
   }
 });
 
+test("workspace library packages expose build artifacts at runtime while keeping source types", async () => {
+  const packagePaths = [
+    "packages/protocol/package.json",
+    "packages/adb/package.json",
+    "packages/transport/package.json",
+    "packages/config/package.json",
+    "packages/shared/package.json",
+  ];
+
+  const packageJsons = await Promise.all(packagePaths.map((path) => json(path)));
+  for (const pkg of packageJsons) {
+    assert.deepEqual(pkg.exports, {
+      ".": {
+        types: "./src/index.ts",
+        default: "./dist/index.js",
+      },
+    });
+  }
+});
+
 test("strict TypeScript options are enabled at the base config", async () => {
   const config = await json("tsconfig.base.json");
   assert.equal(config.compilerOptions.strict, true);

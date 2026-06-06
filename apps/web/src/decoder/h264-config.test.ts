@@ -20,6 +20,7 @@ describe("H264 WebCodecs config boundary", () => {
     });
 
     expect(config).toEqual({
+      avc: { format: "annexb" },
       codec: "avc1.42E01E",
       codedHeight: 1280,
       codedWidth: 720,

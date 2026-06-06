@@ -57,6 +57,7 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
   let status: VideoPipelineStatus = "idle";
   let videoSize: { readonly height: number; readonly width: number } | undefined;
   let decoder: VideoDecoderAdapter | undefined;
+  let annexBCodecConfig: Uint8Array | undefined;
 
   const getDecoder = (): VideoDecoderAdapter | undefined => {
     if (decoder) {
@@ -101,6 +102,9 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
           decoded.value.header.type === MessageType.VideoReconfigure
         ) {
           const config = parseVideoConfigFrame(decoded.value);
+          annexBCodecConfig = isAvcDecoderConfigurationRecord(config.codecConfig)
+            ? undefined
+            : config.codecConfig;
           const activeDecoder = getDecoder();
           if (!activeDecoder) {
             return snapshot();
@@ -142,7 +146,10 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
           }
           const frame = parseVideoFrame(decoded.value);
           activeDecoder.decode({
-            data: frame.data,
+            data:
+              frame.keyFrame && annexBCodecConfig
+                ? concatenateBytes(annexBCodecConfig, frame.data)
+                : frame.data,
             timestamp: Number(frame.timestampUs),
             type: frame.keyFrame ? "key" : "delta",
           });
@@ -165,7 +172,19 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
       pressure = false;
       status = "idle";
       videoSize = undefined;
+      annexBCodecConfig = undefined;
     },
     snapshot,
   };
+}
+
+function isAvcDecoderConfigurationRecord(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 7 && bytes[0] === 1;
+}
+
+function concatenateBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const output = new Uint8Array(left.byteLength + right.byteLength);
+  output.set(left);
+  output.set(right, left.byteLength);
+  return output;
 }

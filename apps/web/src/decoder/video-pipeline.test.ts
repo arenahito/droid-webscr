@@ -19,7 +19,7 @@ describe("video pipeline", () => {
     expect(adapter.configs[0]?.description).toBeUndefined();
     expect(adapter.chunks).toEqual([
       {
-        data: new Uint8Array([0, 0, 1]),
+        data: new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1e, 0, 0, 1]),
         timestamp: 33,
         type: "key",
       },

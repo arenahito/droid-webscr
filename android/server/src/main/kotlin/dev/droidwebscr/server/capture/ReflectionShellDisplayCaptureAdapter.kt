@@ -1,27 +1,44 @@
 package dev.droidwebscr.server.capture
 
-import android.graphics.BitmapFactory
-import android.graphics.Rect
 import android.view.Surface
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class ReflectionShellDisplayCaptureAdapter : ShellDisplayCaptureAdapter {
     override fun start(config: CaptureConfig, inputSurface: Any): CaptureSession {
-        val surfaceControl = Class.forName("android.view.SurfaceControl")
-        val displayToken = try {
-            createDisplay(surfaceControl)
-        } catch (_: NoSuchMethodException) {
-            return ScreencapSurfaceCaptureSession(config, inputSurface as Surface).also { it.start() }
+        val surface = inputSurface as Surface
+        createVirtualDisplay(config, surface)?.let { virtualDisplay ->
+            return CaptureSession {
+                runCatching {
+                    virtualDisplay.javaClass.getMethod("release").invoke(virtualDisplay)
+                }
+            }
         }
+        val surfaceControl = Class.forName("android.view.SurfaceControl")
+        val displayToken = createDisplay(surfaceControl)
         try {
             setDisplaySurface(surfaceControl, displayToken, inputSurface, config)
         } catch (error: ReflectiveOperationException) {
             destroyDisplay(surfaceControl, displayToken)
             throw UnsupportedOperationException("display surface capture unavailable", error)
         }
-        return CaptureSession { destroyDisplay(surfaceControl, displayToken) }
+        setDisplayPowerMode(surfaceControl, displayToken, POWER_MODE_NORMAL)
+        return CaptureSession {
+            setDisplayPowerMode(surfaceControl, displayToken, POWER_MODE_OFF)
+            destroyDisplay(surfaceControl, displayToken)
+        }
     }
+
+    private fun createVirtualDisplay(config: CaptureConfig, surface: Surface): Any? = runCatching {
+        Class.forName("android.hardware.display.DisplayManager")
+            .getMethod(
+                "createVirtualDisplay",
+                String::class.java,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Surface::class.java,
+            )
+            .invoke(null, "droid-webscr", config.width, config.height, config.displayId, surface)
+    }.getOrNull()
 
     private fun createDisplay(surfaceControl: Class<*>): Any {
         val method = surfaceControl.getMethod(
@@ -58,7 +75,7 @@ class ReflectionShellDisplayCaptureAdapter : ShellDisplayCaptureAdapter {
                     null,
                     displayToken,
                     0,
-                    createRect(0, 0, config.width, config.height),
+                    createRect(0, 0, config.sourceWidth, config.sourceHeight),
                     createRect(0, 0, config.width, config.height),
                 )
             } finally {
@@ -81,7 +98,7 @@ class ReflectionShellDisplayCaptureAdapter : ShellDisplayCaptureAdapter {
             transaction,
             displayToken,
             0,
-            createRect(0, 0, config.width, config.height),
+            createRect(0, 0, config.sourceWidth, config.sourceHeight),
             createRect(0, 0, config.width, config.height),
         )
         transactionClass.getMethod("apply").invoke(transaction)
@@ -105,48 +122,19 @@ class ReflectionShellDisplayCaptureAdapter : ShellDisplayCaptureAdapter {
                 .invoke(null, displayToken)
         }
     }
-}
 
-private class ScreencapSurfaceCaptureSession(
-    private val config: CaptureConfig,
-    private val surface: Surface,
-) : CaptureSession {
-    private val running = AtomicBoolean(false)
-    private var worker: Thread? = null
-
-    fun start() {
-        running.set(true)
-        worker = thread(name = "droid-webscr-screencap-capture", isDaemon = true) {
-            while (running.get()) {
-                val drawn = runCatching { drawScreencap() }.getOrDefault(false)
-                try {
-                    Thread.sleep(if (drawn) 100 else 250)
-                } catch (_: InterruptedException) {
-                    return@thread
-                }
-            }
+    private fun setDisplayPowerMode(surfaceControl: Class<*>, displayToken: Any, mode: Int) {
+        runCatching {
+            surfaceControl.getMethod(
+                "setDisplayPowerMode",
+                Class.forName("android.os.IBinder"),
+                Int::class.javaPrimitiveType,
+            ).invoke(null, displayToken, mode)
         }
     }
 
-    override fun stop() {
-        running.set(false)
-        worker?.interrupt()
-        worker = null
-    }
-
-    private fun drawScreencap(): Boolean {
-        val process = ProcessBuilder("screencap", "-p")
-            .redirectError(ProcessBuilder.Redirect.PIPE)
-            .start()
-        val bitmap = process.inputStream.use(BitmapFactory::decodeStream) ?: return false
-        val canvas = surface.lockCanvas(null)
-        try {
-            canvas.drawBitmap(bitmap, null, Rect(0, 0, config.width, config.height), null)
-            return true
-        } finally {
-            surface.unlockCanvasAndPost(canvas)
-            bitmap.recycle()
-            process.destroy()
-        }
+    private companion object {
+        const val POWER_MODE_OFF = 0
+        const val POWER_MODE_NORMAL = 2
     }
 }

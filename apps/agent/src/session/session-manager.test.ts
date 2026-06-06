@@ -33,7 +33,7 @@ describe("session manager", () => {
     expect(manager.verify(created.sessionId, created.token)).toBeUndefined();
   });
 
-  it("reuses the active session for duplicate create requests and cleans up expired sessions", async () => {
+  it("replaces an active session when starting the same device again", async () => {
     let now = 1_000;
     const manager = new SessionManager(
       new FakeAdbProvider([
@@ -48,19 +48,22 @@ describe("session manager", () => {
     );
 
     const first = await manager.create("emulator-5554");
-    const duplicate = await manager.create("emulator-5554");
+    const replacement = await manager.create("emulator-5554");
 
-    expect(duplicate).toEqual(first);
-    expect(manager.verifyForDevice(first.sessionId, first.token, "emulator-5554")).toBeDefined();
+    expect(replacement.sessionId).not.toBe(first.sessionId);
+    expect(manager.verify(first.sessionId, first.token)).toBeUndefined();
+    expect(
+      manager.verifyForDevice(replacement.sessionId, replacement.token, "emulator-5554"),
+    ).toBeDefined();
     expect(manager.verifyForDevice(first.sessionId, first.token, "other-device")).toBeUndefined();
     expect(manager.cleanupExpired()).toBe(0);
 
     now = 1_101;
     expect(manager.cleanupExpired()).toBe(1);
-    expect(manager.verify(first.sessionId, first.token)).toBeUndefined();
+    expect(manager.verify(replacement.sessionId, replacement.token)).toBeUndefined();
 
     const next = await manager.create("emulator-5554");
-    expect(next.sessionId).not.toBe(first.sessionId);
+    expect(next.sessionId).not.toBe(replacement.sessionId);
   });
 
   it("replaces an expired duplicate session lazily when creating a new session", async () => {
@@ -106,12 +109,13 @@ describe("session manager", () => {
 
     expect(second).toEqual(first);
     const active = await manager.create("emulator-5554");
-    expect(active).toEqual(first);
+    expect(active.sessionId).not.toBe(first.sessionId);
+    expect(manager.verify(first.sessionId, first.token)).toBeUndefined();
 
     now = 2_101;
     expect(manager.cleanupExpired()).toBe(1);
     const fresh = await manager.create("emulator-5554");
-    expect(fresh.sessionId).not.toBe(first.sessionId);
+    expect(fresh.sessionId).not.toBe(active.sessionId);
   });
 
   it("rechecks active sessions after the device list await boundary", async () => {
@@ -150,11 +154,9 @@ describe("session manager", () => {
 
     releaseDeviceList?.();
 
-    await expect(pending).resolves.toEqual({
-      serial: "emulator-5554",
-      sessionId: injected.sessionId,
-      token: injected.token,
-    });
+    const created = await pending;
+    expect(created.sessionId).not.toBe(injected.sessionId);
+    expect(manager.verify(injected.sessionId, injected.token)).toBeUndefined();
   });
 
   it("recovers from a stale device index without blocking new session creation", async () => {

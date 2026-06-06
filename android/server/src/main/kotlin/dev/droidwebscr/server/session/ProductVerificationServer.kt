@@ -1,5 +1,6 @@
 package dev.droidwebscr.server.session
 
+import android.content.res.Resources
 import android.net.LocalServerSocket
 import dev.droidwebscr.server.capture.CaptureConfig
 import dev.droidwebscr.server.capture.DisplayCaptureBackend
@@ -32,6 +33,7 @@ class ProductVerificationServer(
 ) {
     fun serveOnce() {
         LocalServerSocket(socketName).use { server ->
+            println("droid-webscr:ready:$socketName")
             server.accept().use { socket ->
                 serveConnection(socket.inputStream, socket.outputStream)
             }
@@ -55,17 +57,31 @@ class ProductVerificationServer(
             ),
         )
 
-        val config = VideoEncoderConfig(width = 720, height = 1280, bitrate = 2_000_000, fps = 30).validated()
+        val displaySize = readCurrentDisplaySize()
+        val outputSize = displaySize.fitWithin(maxWidth = 1080, maxHeight = 1920)
+        val config = VideoEncoderConfig(
+            width = outputSize.width,
+            height = outputSize.height,
+            bitrate = 2_000_000,
+            fps = 30,
+        ).validated()
         encoder.start(config)
         val captureSession = captureBackend.start(
-            CaptureConfig(displayId = 0, width = config.width, height = config.height),
+            CaptureConfig(
+                displayId = 0,
+                width = config.width,
+                height = config.height,
+                sourceWidth = displaySize.width,
+                sourceHeight = displaySize.height,
+            ),
             encoder.inputSurface(),
         )
         try {
             emitFirstEncodedFrames(output, config)
             val dispatcher = ControlFrameDispatcher(
                 bounds = InputDisplayBounds(config.width, config.height),
-                inputInjector = inputInjectorFactory(InputDisplayBounds(config.width, config.height)),
+                inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
+                inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height)),
                 reconfigureVideo = { nextConfig -> encoder.reconfigure(nextConfig) },
             )
             readAndDispatchControls(input, output, dispatcher)
@@ -169,6 +185,72 @@ class ProductVerificationServer(
         const val MAX_PAYLOAD_LENGTH_BYTES = 16 * 1024 * 1024
     }
 }
+
+internal data class DisplaySize(val width: Int, val height: Int) {
+    fun fitWithin(maxWidth: Int, maxHeight: Int): DisplaySize {
+        val scale = minOf(maxWidth.toDouble() / width.toDouble(), maxHeight.toDouble() / height.toDouble(), 1.0)
+        return DisplaySize(
+            width = (width * scale).toInt().roundDownToEven(),
+            height = (height * scale).toInt().roundDownToEven(),
+        )
+    }
+}
+
+private fun readCurrentDisplaySize(): DisplaySize {
+    return sequenceOf(
+        { readWindowManagerDisplaySize() },
+        { readResourcesDisplaySize() },
+        { readWmCommandDisplaySize() },
+    ).firstNotNullOfOrNull { reader ->
+        val displaySize = reader()
+        if (displaySize != null && displaySize.isUsable()) displaySize else null
+    }
+        ?: error("Unable to determine Android display size.")
+}
+
+private fun readWindowManagerDisplaySize(): DisplaySize? = runCatching {
+    val pointClass = Class.forName("android.graphics.Point")
+    val point = pointClass.getConstructor().newInstance()
+    val service = Class.forName("android.view.WindowManagerGlobal")
+        .getMethod("getWindowManagerService")
+        .invoke(null)
+    service.javaClass.methods.firstOrNull {
+        it.name == "getInitialDisplaySize" && it.parameterTypes.size == 2
+    }?.invoke(service, 0, point) ?: return null
+    DisplaySize(
+        width = pointClass.getField("x").getInt(point),
+        height = pointClass.getField("y").getInt(point),
+    )
+}.getOrNull()
+
+private fun readResourcesDisplaySize(): DisplaySize {
+    val metrics = Resources.getSystem().displayMetrics
+    return DisplaySize(width = metrics.widthPixels, height = metrics.heightPixels)
+}
+
+private fun readWmCommandDisplaySize(): DisplaySize? = runCatching {
+    val process = ProcessBuilder("wm", "size")
+        .redirectError(ProcessBuilder.Redirect.PIPE)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    process.waitFor()
+    parseWmSizeOutput(output)
+}.getOrNull()
+
+internal fun parseWmSizeOutput(output: String): DisplaySize? {
+    val matches = Regex("""(?m)^(Override|Physical) size:\s*(\d+)x(\d+)\s*$""").findAll(output).toList()
+    return matches
+        .firstOrNull { match -> match.groupValues[1] == "Override" }
+        .orElse(matches.firstOrNull())
+        ?.let { match -> DisplaySize(match.groupValues[2].toInt(), match.groupValues[3].toInt()) }
+        ?.takeIf(DisplaySize::isUsable)
+}
+
+private fun DisplaySize.isUsable(): Boolean = width >= 64 && height >= 64
+
+private fun <T> T?.orElse(fallback: T?): T? = this ?: fallback
+
+private fun Int.roundDownToEven(): Int = if (this % 2 == 0) this else this - 1
 
 private inline fun <T : Closeable?, R> T.use(block: (T) -> R): R {
     var failure: Throwable? = null

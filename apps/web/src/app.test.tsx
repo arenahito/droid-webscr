@@ -1,7 +1,13 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { decodeFrame, MessageType } from "@droid-webscr/protocol";
+import {
+  createFrameHeader,
+  decodeFrame,
+  encodeFrame,
+  MessageType,
+  StreamId,
+} from "@droid-webscr/protocol";
 import { DroidWebscrApp } from "./app.js";
 import { createMemoryStorage } from "./lib/memory-storage.js";
 import { VideoPipeline, VideoPipelineSnapshot } from "./decoder/video-pipeline.js";
@@ -182,6 +188,18 @@ describe("DroidWebscrApp", () => {
 
     expect(home.ok && home.value.header.type).toBe(MessageType.ControlSystem);
     expect(home.ok && [...home.value.payload]).toEqual([1]);
+    socket.receive(
+      encodeFrame({
+        header: createFrameHeader({
+          payloadLength: new TextEncoder().encode("control:home:Accepted").byteLength,
+          streamId: StreamId.Log,
+          type: MessageType.LogRecord,
+        }),
+        payload: new TextEncoder().encode("control:home:Accepted"),
+      }),
+    );
+
+    expect(await screen.findByText("control:home:Accepted")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(socket.closed).toBe(true);

@@ -53,6 +53,7 @@ export function isUsableDevice(device: AdbDeviceDescriptor): boolean {
 
 export class FakeAdbProvider implements AdbProvider {
   private readonly devices: readonly AdbDeviceDescriptor[];
+  private readonly sessions = new Map<string, FakeAdbDeviceSession>();
 
   public constructor(devices: readonly AdbDeviceDescriptor[]) {
     this.devices = devices;
@@ -67,13 +68,21 @@ export class FakeAdbProvider implements AdbProvider {
     if (!device || !isUsableDevice(device)) {
       throw new Error(`ADB device is not available: ${serial}`);
     }
-    return new FakeAdbDeviceSession(serial);
+    const existing = this.sessions.get(serial);
+    if (existing) {
+      return existing;
+    }
+    const session = new FakeAdbDeviceSession(serial);
+    this.sessions.set(serial, session);
+    return session;
   }
 }
 
 export class FakeAdbDeviceSession implements AdbDeviceSession {
   public closed = false;
+  public readonly commands: string[][] = [];
   public readonly pushes: Array<{ readonly localPath: string; readonly remotePath: string }> = [];
+  public readonly sockets: FakeAdbSocket[] = [];
 
   public constructor(public readonly serial: string) {}
 
@@ -82,16 +91,19 @@ export class FakeAdbDeviceSession implements AdbDeviceSession {
   }
 
   public async shell(command: readonly string[]): Promise<AdbShellProcess> {
+    this.commands.push([...command]);
     return {
       command,
-      exit: Promise.resolve(0),
+      exit: new Promise(() => {}),
       stderr: Readable.from([]),
-      stdout: Readable.from([]),
+      stdout: Readable.from([new TextEncoder().encode("droid-webscr:ready:droid-webscr\n")]),
     };
   }
 
   public async openSocket(_name: string): Promise<AdbSocket> {
-    return new FakeAdbSocket();
+    const socket = new FakeAdbSocket();
+    this.sockets.push(socket);
+    return socket;
   }
 
   public async close(): Promise<void> {
@@ -99,8 +111,14 @@ export class FakeAdbDeviceSession implements AdbDeviceSession {
   }
 }
 
-class FakeAdbSocket implements AdbSocket {
+export class FakeAdbSocket implements AdbSocket {
+  public closed = false;
+  public readonly writes: Uint8Array[] = [];
   public readonly chunks = Readable.from([]);
-  public async write(_chunk: Uint8Array): Promise<void> {}
-  public async close(): Promise<void> {}
+  public async write(chunk: Uint8Array): Promise<void> {
+    this.writes.push(chunk);
+  }
+  public async close(): Promise<void> {
+    this.closed = true;
+  }
 }

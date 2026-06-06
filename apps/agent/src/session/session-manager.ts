@@ -19,14 +19,11 @@ export class SessionManager {
   ) {}
 
   public create(deviceSerial: string): Promise<CreateSessionResult> {
-    const active = this.activeSessionForDevice(deviceSerial);
-    if (active) {
-      return Promise.resolve(active);
-    }
     const inFlight = this.inFlightCreatesByDeviceSerial.get(deviceSerial);
     if (inFlight) {
       return inFlight;
     }
+    this.deleteActiveSessionForDevice(deviceSerial);
     const created = this.createFresh(deviceSerial).finally(() => {
       this.inFlightCreatesByDeviceSerial.delete(deviceSerial);
     });
@@ -36,10 +33,7 @@ export class SessionManager {
 
   private async createFresh(deviceSerial: string): Promise<CreateSessionResult> {
     const devices = await this.adbProvider.listDevices();
-    const active = this.activeSessionForDevice(deviceSerial);
-    if (active) {
-      return active;
-    }
+    this.deleteActiveSessionForDevice(deviceSerial);
     const device = devices.find((item) => item.serial === deviceSerial);
     if (!device || !isUsableDevice(device)) {
       throw new Error("Device is not available for session creation.");
@@ -94,23 +88,15 @@ export class SessionManager {
     }
   }
 
-  private activeSessionForDevice(deviceSerial: string): CreateSessionResult | undefined {
+  private deleteActiveSessionForDevice(deviceSerial: string): void {
     const sessionId = this.sessionsByDeviceSerial.get(deviceSerial);
     if (!sessionId) {
-      return undefined;
+      return;
     }
     const record = this.sessions.get(sessionId);
-    if (!record || record.expiresAtMs <= this.now()) {
-      this.sessionsByDeviceSerial.delete(deviceSerial);
-      if (record) {
-        this.sessions.delete(sessionId);
-      }
-      return undefined;
+    this.sessionsByDeviceSerial.delete(deviceSerial);
+    if (record) {
+      this.sessions.delete(sessionId);
     }
-    return {
-      serial: deviceSerial,
-      sessionId,
-      token: record.token,
-    };
   }
 }

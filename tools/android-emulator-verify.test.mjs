@@ -80,6 +80,8 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
     createVideoConfigFrame(),
     createVideoFrame(),
     createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:key:Accepted"),
     createLogFrame("control:key:Accepted"),
     createLogFrame("control:text:Accepted"),
     createLogFrame("control:home:Accepted"),
@@ -124,6 +126,8 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
       "socket.writeFrame",
       "socket.writeFrame",
       "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
       "socket.close",
       "-s emulator-5554 forward --remove tcp:41001",
       "-s emulator-5554 shell rm -f /data/local/tmp/droid-webscr-server.jar",
@@ -131,6 +135,8 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
   );
   assert.deepEqual(result.controlLogs, [
     "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:key:Accepted",
     "control:key:Accepted",
     "control:text:Accepted",
     "control:home:Accepted",

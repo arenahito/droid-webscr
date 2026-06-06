@@ -3,6 +3,8 @@ package dev.droidwebscr.server.input
 import java.util.concurrent.TimeUnit
 
 class ReflectionInputEventAdapter : InputEventAdapter {
+    private val pointerGestureClock = PointerGestureClock()
+
     override fun injectKey(event: KeyControlMessage): Boolean {
         val validated = event.validated()
         val action = when (validated.action) {
@@ -19,6 +21,8 @@ class ReflectionInputEventAdapter : InputEventAdapter {
     }
 
     override fun injectPointer(event: PointerControlMessage): Boolean {
+        val eventTime = System.currentTimeMillis()
+        val downTime = pointerGestureClock.downTimeFor(event, eventTime)
         val action = when (event.action) {
             PointerAction.Down -> MOTION_ACTION_DOWN
             PointerAction.Move -> MOTION_ACTION_MOVE
@@ -27,7 +31,7 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         }
         val reflected = inject(
             setEventSource(
-                createMotionEvent(action, event.x.toFloat(), event.y.toFloat(), event.pressure),
+                createMotionEvent(downTime, eventTime, action, event.x.toFloat(), event.y.toFloat(), event.pressure),
                 SOURCE_TOUCHSCREEN,
             ),
         )
@@ -83,8 +87,7 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         return requireNotNull(constructor.newInstance(now, now, action, keyCode, repeat, metaState, 0, 0))
     }
 
-    private fun createMotionEvent(action: Int, x: Float, y: Float, pressure: Float): Any {
-        val now = System.currentTimeMillis()
+    private fun createMotionEvent(downTime: Long, eventTime: Long, action: Int, x: Float, y: Float, pressure: Float): Any {
         val motionEventClass = Class.forName("android.view.MotionEvent")
         return requireNotNull(motionEventClass.getMethod(
             "obtain",
@@ -100,7 +103,7 @@ class ReflectionInputEventAdapter : InputEventAdapter {
             Float::class.javaPrimitiveType,
             Int::class.javaPrimitiveType,
             Int::class.javaPrimitiveType,
-        ).invoke(null, now, now, action, x, y, pressure, 1.0f, 0, 1.0f, 1.0f, 0, 0))
+        ).invoke(null, downTime, eventTime, action, x, y, pressure, 1.0f, 0, 1.0f, 1.0f, 0, 0))
     }
 
     private fun setEventSource(event: Any, source: Int): Any {
@@ -135,5 +138,17 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         const val INJECT_INPUT_EVENT_MODE_ASYNC = 0
         const val SOURCE_KEYBOARD = 0x00000101
         const val SOURCE_TOUCHSCREEN = 0x00001002
+    }
+}
+
+internal class PointerGestureClock {
+    private val downTimes = mutableMapOf<Int, Long>()
+
+    fun downTimeFor(event: PointerControlMessage, eventTime: Long): Long = when (event.action) {
+        PointerAction.Down -> eventTime.also { downTimes[event.pointerId] = it }
+        PointerAction.Move -> downTimes[event.pointerId] ?: eventTime
+        PointerAction.Up,
+        PointerAction.Cancel,
+        -> (downTimes.remove(event.pointerId) ?: eventTime)
     }
 }

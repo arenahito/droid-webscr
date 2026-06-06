@@ -8,12 +8,21 @@ data class CaptureConfig(
     val displayId: Int,
     val width: Int,
     val height: Int,
+    val sourceWidth: Int = width,
+    val sourceHeight: Int = height,
 ) {
     fun validated(): CaptureConfig {
         require(displayId >= 0) { "Display id must be non-negative." }
         require(width >= 64) { "Capture width must be at least 64 pixels." }
         require(height >= 64) { "Capture height must be at least 64 pixels." }
-        return copy(width = width.roundDownToEven(), height = height.roundDownToEven())
+        require(sourceWidth >= 64) { "Capture source width must be at least 64 pixels." }
+        require(sourceHeight >= 64) { "Capture source height must be at least 64 pixels." }
+        return copy(
+            width = width.roundDownToEven(),
+            height = height.roundDownToEven(),
+            sourceWidth = sourceWidth.roundDownToEven(),
+            sourceHeight = sourceHeight.roundDownToEven(),
+        )
     }
 }
 

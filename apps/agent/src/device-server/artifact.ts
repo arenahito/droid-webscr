@@ -4,6 +4,6 @@ export interface DeviceServerArtifact {
 }
 
 export const defaultDeviceServerArtifact: DeviceServerArtifact = {
-  localPath: "android/server/build/install/server/server.jar",
+  localPath: "android/server/build/droid-webscr-server-android.jar",
   remotePath: "/data/local/tmp/droid-webscr-server.jar",
 };

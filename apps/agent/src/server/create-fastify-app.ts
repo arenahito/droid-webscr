@@ -1,11 +1,13 @@
 import websocket from "@fastify/websocket";
 import { AdbProvider } from "@droid-webscr/adb";
 import { AgentConfig, validateAgentConfig } from "@droid-webscr/config";
+import { encodeFrame } from "@droid-webscr/protocol";
+import { readFrames } from "@droid-webscr/transport";
 import Fastify from "fastify";
 import { DeviceServer, AdbDeviceServer } from "../device-server/start.js";
 import { isAllowedHost, isAllowedOrigin } from "../security/origin.js";
+import { StartedDeviceSession } from "../session/device-session.js";
 import { SessionManager } from "../session/session-manager.js";
-import { bridgeBrowserToDevice } from "../session/bridge-session.js";
 import { registerRoutes } from "./routes.js";
 import { binaryWebSocketProtocol } from "./websocket.js";
 
@@ -84,7 +86,7 @@ export async function createFastifyApp(context: AgentAppContext) {
       },
       websocket: true,
     },
-    async (socket, request) => {
+    (socket, request) => {
       const params = request.params as { sessionId: string };
       const query = request.query as { token?: string };
       const record = sessionManager.verify(params.sessionId, query.token);
@@ -99,15 +101,66 @@ export async function createFastifyApp(context: AgentAppContext) {
         activeBrowserSessions.delete(params.sessionId);
         activeDeviceSerials.delete(record.deviceSerial);
       };
-      socket.on("close", release);
-      socket.on("error", release);
-      try {
-        const deviceSession = await deviceServer.start(record.deviceSerial);
-        bridgeBrowserToDevice(socket, deviceSession);
-      } catch (error) {
+      const pendingBrowserFrames: Uint8Array[] = [];
+      let deviceSession: StartedDeviceSession | undefined;
+      let deviceSessionPromise: Promise<StartedDeviceSession> | undefined;
+      let closed = false;
+      const close = async () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
         release();
-        throw error;
-      }
+        const activeSession = deviceSession ?? (await deviceSessionPromise?.catch(() => undefined));
+        await activeSession?.stop();
+      };
+      const bufferBrowserFrame = (data: Buffer | ArrayBuffer | Buffer[]) => {
+        if (typeof data === "string") {
+          return;
+        }
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            pendingBrowserFrames.push(new Uint8Array(item));
+          }
+          return;
+        }
+        const frame = data instanceof Uint8Array ? data : new Uint8Array(data);
+        if (deviceSession) {
+          void deviceSession.write(frame).catch(close);
+          return;
+        }
+        pendingBrowserFrames.push(frame);
+      };
+      socket.on("message", bufferBrowserFrame);
+      socket.on("close", () => {
+        void close();
+      });
+      socket.on("error", () => {
+        void close();
+      });
+
+      deviceSessionPromise = deviceServer.start(record.deviceSerial);
+      void deviceSessionPromise
+        .then(async (startedSession) => {
+          if (closed) {
+            await startedSession.stop();
+            return;
+          }
+          deviceSession = startedSession;
+          await Promise.all(
+            pendingBrowserFrames.splice(0).map((frame) => startedSession.write(frame)),
+          );
+          for await (const frame of readFrames(startedSession.frames)) {
+            socket.send(encodeFrame(frame));
+          }
+        })
+        .catch(() => {
+          release();
+          closeBrowserSocket(socket, 1011, "Device session failed");
+        })
+        .finally(() => {
+          void close();
+        });
     },
   );
 
@@ -124,4 +177,12 @@ export function hasBinaryWebSocketProtocol(header: string | string[] | undefined
     .filter((value): value is string => value !== undefined)
     .flatMap((value) => value.split(","))
     .some((value) => value.trim() === binaryWebSocketProtocol);
+}
+
+function closeBrowserSocket(
+  socket: { close?: (code?: number, reason?: string) => void },
+  code: number,
+  reason: string,
+): void {
+  socket.close?.(code, reason);
 }

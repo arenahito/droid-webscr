@@ -16,13 +16,14 @@ import java.nio.ByteOrder
 
 internal class ControlFrameDispatcher(
     private val bounds: InputDisplayBounds,
+    private val inputBounds: InputDisplayBounds = bounds,
     private val inputInjector: InputInjector,
     private val reconfigureVideo: (VideoEncoderConfig) -> Unit,
 ) {
     fun dispatch(frame: Frame): String = when (frame.header.type) {
         MessageType.CONTROL_POINTER.value -> {
             requireControlStream(frame)
-            "control:pointer:${inputInjector.injectPointer(parsePointer(frame))}"
+            "control:pointer:${inputInjector.injectPointer(parsePointer(frame).scaledToInputBounds())}"
         }
         MessageType.CONTROL_KEY.value -> {
             requireControlStream(frame)
@@ -72,6 +73,16 @@ internal class ControlFrameDispatcher(
             buttons = buffer.getShort(14).toInt() and 0xffff,
             displayId = buffer.getInt(16),
         ).validated(bounds)
+    }
+
+    private fun PointerControlMessage.scaledToInputBounds(): PointerControlMessage {
+        if (bounds.width == inputBounds.width && bounds.height == inputBounds.height) {
+            return this
+        }
+        return copy(
+            x = scaleCoordinate(x, bounds.width, inputBounds.width),
+            y = scaleCoordinate(y, bounds.height, inputBounds.height),
+        ).validated(inputBounds)
     }
 
     private fun parseKey(frame: Frame): KeyControlMessage {
@@ -134,3 +145,8 @@ internal class ControlFrameDispatcher(
 
     private fun Frame.payloadBuffer(): ByteBuffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
 }
+
+private fun scaleCoordinate(value: Int, fromMax: Int, toMax: Int): Int =
+    ((value.toLong() * toMax.toLong()) / fromMax.toLong())
+        .coerceIn(0, (toMax - 1).toLong())
+        .toInt()

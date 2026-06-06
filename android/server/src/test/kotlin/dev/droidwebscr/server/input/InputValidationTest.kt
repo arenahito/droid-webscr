@@ -67,6 +67,17 @@ class InputValidationTest {
         )
     }
 
+    @Test
+    fun `pointer gesture clock keeps the original down time until the gesture ends`() {
+        val clock = PointerGestureClock()
+        val pointer = PointerControlMessage(PointerAction.Down, pointerId = 3, x = 10, y = 20)
+
+        assertEquals(100L, clock.downTimeFor(pointer, eventTime = 100L))
+        assertEquals(100L, clock.downTimeFor(pointer.copy(action = PointerAction.Move), eventTime = 120L))
+        assertEquals(100L, clock.downTimeFor(pointer.copy(action = PointerAction.Up), eventTime = 140L))
+        assertEquals(200L, clock.downTimeFor(pointer.copy(action = PointerAction.Move), eventTime = 200L))
+    }
+
     private class RecordingInputEventAdapter : InputEventAdapter {
         val events = mutableListOf<String>()
 

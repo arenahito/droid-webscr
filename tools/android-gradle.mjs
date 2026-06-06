@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { buildAndroidServerArtifact, createProcessRunner } from "./android-emulator-verify-lib.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const command = process.argv[2];
@@ -44,23 +45,46 @@ async function findGradle() {
 }
 
 function runGradle(executable, gradleTask) {
-  const result = spawnSync(executable, [gradleTask, "--warning-mode", "fail"], {
+  const gradleInvocation =
+    process.platform === "win32" && /\.(bat|cmd)$/i.test(executable)
+      ? {
+          args: ["/d", "/c", executable, gradleTask, "--warning-mode", "fail"],
+          executable: "cmd.exe",
+        }
+      : { args: [gradleTask, "--warning-mode", "fail"], executable };
+  const result = spawnSync(gradleInvocation.executable, gradleInvocation.args, {
     cwd: new URL("../android/server/", import.meta.url),
     stdio: "inherit",
-    shell: process.platform === "win32",
   });
-  process.exit(result.status ?? 1);
+  const status = result.status ?? 1;
+  if (status !== 0) {
+    process.exit(status);
+  }
+}
+
+async function buildDeployArtifact() {
+  await buildAndroidServerArtifact({
+    artifactPath: "android/server/build/droid-webscr-server-android.jar",
+    runner: createProcessRunner(),
+  });
+}
+
+async function runAndroidCommand(executable) {
+  const gradleTask = command === "build" ? "assemble" : "check";
+  runGradle(executable, gradleTask);
+  if (command === "build") {
+    await buildDeployArtifact();
+  }
+  process.exit(0);
 }
 
 if (await fileExists(wrapperPath)) {
-  const gradleTask = command === "build" ? "assemble" : "check";
-  runGradle(wrapperPath, gradleTask);
+  await runAndroidCommand(wrapperPath);
 }
 
 const gradlePath = await findGradle();
 if (gradlePath) {
-  const gradleTask = command === "build" ? "assemble" : "check";
-  runGradle(gradlePath, gradleTask);
+  await runAndroidCommand(gradlePath);
 }
 
 throw new Error(

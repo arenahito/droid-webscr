@@ -7,10 +7,18 @@ import kotlin.test.assertFailsWith
 class CaptureBackendTest {
     @Test
     fun `validates capture config`() {
-        val config = CaptureConfig(displayId = 0, width = 1081, height = 2401).validated()
+        val config = CaptureConfig(
+            displayId = 0,
+            width = 1081,
+            height = 2401,
+            sourceWidth = 1281,
+            sourceHeight = 2857,
+        ).validated()
 
         assertEquals(1080, config.width)
         assertEquals(2400, config.height)
+        assertEquals(1280, config.sourceWidth)
+        assertEquals(2856, config.sourceHeight)
         assertFailsWith<IllegalArgumentException> {
             CaptureConfig(displayId = -1, width = 1080, height = 2400).validated()
         }

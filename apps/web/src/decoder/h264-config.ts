@@ -38,11 +38,13 @@ export function createWebCodecsH264Config(input: WebCodecsH264ConfigInput): Vide
     throw new Error("H.264 codec configuration does not contain SPS metadata.");
   }
 
-  return {
+  const config = {
+    avc: { format: "annexb" },
     codec: codecStringFromProfile(sps[1]!, sps[2]!, sps[3]!),
     codedHeight: input.height,
     codedWidth: input.width,
   };
+  return config;
 }
 
 function isAvcDecoderConfigurationRecord(bytes: Uint8Array): boolean {

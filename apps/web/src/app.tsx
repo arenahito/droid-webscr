@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import {
   createFrameHeader,
+  decodeFrame,
   createSystemControlFrame,
   createVideoReconfigureFrame,
   encodeFrame,
@@ -192,6 +193,15 @@ export function DroidWebscrApp({
         });
         videoPipelineRef.current = pipeline;
         socket.onFrame((frame) => {
+          const decoded = decodeFrame(frame);
+          if (
+            decoded.ok &&
+            decoded.value.header.type === MessageType.LogRecord &&
+            decoded.value.header.streamId === StreamId.Log
+          ) {
+            dispatch({ message: new TextDecoder().decode(decoded.value.payload), type: "log" });
+            return;
+          }
           void pipeline.acceptFrame(frame).then((snapshot) => {
             setVideoSnapshot(snapshot);
             if (snapshot.pressure) {
@@ -1111,6 +1121,9 @@ function describeVideoStatus(snapshot: VideoPipelineSnapshot | undefined): {
   }
   if (snapshot.pressure) {
     return { detail: "Dropping frames to keep latency bounded", title: "Decode pressure" };
+  }
+  if (!snapshot.configured) {
+    return { detail: "Waiting for Android video configuration", title: "Viewport fit active" };
   }
   return { detail: "Receiving Android video", title: "Video ready" };
 }

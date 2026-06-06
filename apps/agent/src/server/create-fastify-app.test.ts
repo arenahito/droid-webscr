@@ -376,6 +376,114 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("buffers browser frames sent while the device server is still starting", async () => {
+    let releaseStart: (() => void) | undefined;
+    const writes: Uint8Array[] = [];
+    const context = testContext();
+    const app = await createFastifyApp({
+      ...context,
+      deviceServer: {
+        async start(serial) {
+          await new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          });
+          return {
+            frames: (async function* (): AsyncIterable<Uint8Array> {})(),
+            serial,
+            stop: async () => {},
+            write: async (frame: Uint8Array) => {
+              writes.push(frame);
+            },
+          };
+        },
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    const frame = new Uint8Array([1, 2, 3]);
+
+    ws.send(frame);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(writes).toEqual([]);
+    releaseStart?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writes.map((item) => Array.from(item))).toEqual([Array.from(frame)]);
+    ws.terminate();
+    await app.close();
+  });
+
+  it("keeps the websocket open while waiting for device frames after startup", async () => {
+    let releaseStart: (() => void) | undefined;
+    let pushFrame: ((frame: Uint8Array) => void) | undefined;
+    const context = testContext();
+    const app = await createFastifyApp({
+      ...context,
+      deviceServer: {
+        async start(serial) {
+          await new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          });
+          return {
+            frames: (async function* (): AsyncIterable<Uint8Array> {
+              yield await new Promise<Uint8Array>((resolve) => {
+                pushFrame = resolve;
+              });
+            })(),
+            serial,
+            stop: async () => {},
+            write: async () => {},
+          };
+        },
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    const fromDevice = new Promise<Buffer>((resolve) => {
+      ws.once("message", (data: Buffer) => resolve(data));
+    });
+    const frame = encodeFrame({
+      header: createFrameHeader({
+        sequence: 2n,
+        streamId: StreamId.Control,
+        type: MessageType.ControlText,
+      }),
+      payload: new Uint8Array([4, 5, 6]),
+    });
+
+    releaseStart?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ws.readyState).toBe(1);
+    pushFrame?.(frame);
+    expect([...new Uint8Array(await fromDevice)]).toEqual([...frame]);
+
+    ws.terminate();
+    await app.close();
+  });
+
   it("rejects duplicate active browser connections but allows reconnect after close", async () => {
     const context = testContext();
     const app = await createFastifyApp(context);

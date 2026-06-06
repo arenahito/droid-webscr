@@ -59,6 +59,21 @@ class ControlFrameDispatcherTest {
         assertEquals(VideoEncoderConfig(width = 720, height = 1280, bitrate = 4_000_000, fps = 45), configs.single())
     }
 
+    @Test
+    fun `scales encoded pointer coordinates to physical input bounds`() {
+        val input = RecordingInputInjector()
+        val dispatcher = ControlFrameDispatcher(
+            bounds = InputDisplayBounds(width = 860, height = 1920),
+            inputBounds = InputDisplayBounds(width = 1280, height = 2856),
+            inputInjector = input,
+            reconfigureVideo = { error("unexpected video reconfigure") },
+        )
+
+        assertEquals("control:pointer:Accepted", dispatcher.dispatch(pointerFrame(x = 430, y = 1600)))
+
+        assertEquals("pointer:Down:640:2380:1.0:1:0", input.events.single())
+    }
+
     private class RecordingInputInjector : InputInjector {
         val events = mutableListOf<String>()
 
@@ -84,14 +99,14 @@ class ControlFrameDispatcherTest {
     }
 }
 
-private fun pointerFrame(): Frame {
+private fun pointerFrame(x: Int = 24, y: Int = 48): Frame {
     val payload = ByteBuffer.allocate(20)
         .order(ByteOrder.BIG_ENDIAN)
         .put(0)
         .put(0)
         .putShort(1)
-        .putInt(24)
-        .putInt(48)
+        .putInt(x)
+        .putInt(y)
         .put(255.toByte())
         .put(0)
         .putShort(1)

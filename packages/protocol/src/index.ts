@@ -1,6 +1,10 @@
-export const protocolMagic = "DWSC" as const;
-export const protocolVersion = 1 as const;
+export * from "./codec.js";
+export * from "./errors.js";
+export * from "./frame.js";
+export * from "./messages.js";
+export * from "./sequence.js";
+export * from "./streams.js";
 
 export function describeProtocol(): string {
-  return `${protocolMagic}/v${protocolVersion}`;
+  return "DWSC/v1";
 }

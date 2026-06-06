@@ -2,8 +2,14 @@ package dev.droidwebscr.server
 
 import dev.droidwebscr.server.lifecycle.ServerLifecycle
 import dev.droidwebscr.server.log.StdoutServerLogger
+import dev.droidwebscr.server.session.LocalAbstractHelloServer
 
-fun main() {
+fun main(args: Array<String>) {
+    if (args.firstOrNull() == "--hello-once") {
+        LocalAbstractHelloServer(args.getOrElse(1) { "droid-webscr" }).serveOnce()
+        return
+    }
+
     val logger = StdoutServerLogger()
     val lifecycle = ServerLifecycle()
     lifecycle.start()

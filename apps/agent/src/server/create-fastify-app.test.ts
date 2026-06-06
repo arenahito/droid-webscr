@@ -188,7 +188,53 @@ describe("agent server", () => {
       port: 7391,
     });
     expect((await app.inject({ headers, method: "GET", url: "/api/share-url" })).json()).toEqual({
-      url: "http://0.0.0.0:7391",
+      url: "http://127.0.0.1:7391",
+    });
+    expect(
+      (
+        await app.inject({
+          headers,
+          method: "PATCH",
+          payload: { bindHost: "192.168.1.20", port: 7400 },
+          url: "/api/config/bind",
+        })
+      ).json(),
+    ).toEqual({
+      bindHost: "192.168.1.20",
+      clipboardEnabled: true,
+      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      ok: true,
+      port: 7400,
+      shareUrl: "http://192.168.1.20:7400",
+    });
+    expect((await app.inject({ headers, method: "GET", url: "/api/config" })).json()).toEqual({
+      bindHost: "192.168.1.20",
+      clipboardEnabled: true,
+      port: 7400,
+    });
+    expect(
+      (
+        await app.inject({
+          headers,
+          method: "PATCH",
+          payload: { enabled: false },
+          url: "/api/config/clipboard",
+        })
+      ).json(),
+    ).toEqual({
+      bindHost: "192.168.1.20",
+      clipboardEnabled: false,
+      message: "Clipboard sync disabled",
+      ok: true,
+      port: 7400,
+    });
+    expect((await app.inject({ headers, method: "GET", url: "/api/config" })).json()).toEqual({
+      bindHost: "192.168.1.20",
+      clipboardEnabled: false,
+      port: 7400,
+    });
+    expect((await app.inject({ headers, method: "GET", url: "/api/share-url" })).json()).toEqual({
+      url: "http://192.168.1.20:7400",
     });
     expect(
       (
@@ -233,6 +279,68 @@ describe("agent server", () => {
     ).toEqual({ message: "Device emulator-5554 disconnected", ok: true });
     expect(connectedEndpoints).toEqual(["192.168.1.40:5555"]);
     expect(disconnectedSerials).toEqual(["emulator-5554"]);
+    await app.close();
+  });
+
+  it("normalizes share URLs for wildcard and IPv6 bind hosts", async () => {
+    const wildcard = await createFastifyApp(
+      testContext({
+        authToken: "secret",
+        bindHost: "0.0.0.0",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+    const ipv6 = await createFastifyApp(
+      testContext({
+        authToken: undefined,
+        bindHost: "::1",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+
+    expect(
+      (
+        await wildcard.inject({
+          headers: { authorization: "Bearer secret" },
+          method: "GET",
+          url: "/api/share-url",
+        })
+      ).json(),
+    ).toEqual({ url: "http://127.0.0.1:7391" });
+    expect((await ipv6.inject({ method: "GET", url: "/api/share-url" })).json()).toEqual({
+      url: "http://[::1]:7391",
+    });
+    await wildcard.close();
+    await ipv6.close();
+  });
+
+  it("rejects unsafe runtime bind updates without auth", async () => {
+    const app = await createFastifyApp(testContext());
+
+    const response = await app.inject({
+      method: "PATCH",
+      payload: { bindHost: "0.0.0.0", port: 7391 },
+      url: "/api/config/bind",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "Non-local bind addresses require authToken." });
+    await app.close();
+  });
+
+  it("rejects invalid runtime clipboard updates", async () => {
+    const app = await createFastifyApp(testContext());
+
+    await expect(
+      app.inject({
+        method: "PATCH",
+        payload: { enabled: "yes" },
+        url: "/api/config/clipboard",
+      }),
+    ).resolves.toMatchObject({ statusCode: 400 });
+
     await app.close();
   });
 

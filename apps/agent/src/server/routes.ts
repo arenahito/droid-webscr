@@ -14,6 +14,11 @@ export interface RouteContext {
 
 export function registerRoutes(app: FastifyInstance, context: RouteContext): void {
   const deviceAliases = new Map<string, string>();
+  let runtimeBind = {
+    bindHost: context.config.bindHost,
+    port: context.config.port,
+  };
+  let runtimeClipboardEnabled = context.config.clipboard.enabled;
 
   app.get("/api/health", async () => ({
     status: "ok",
@@ -25,9 +30,9 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     return {
-      bindHost: context.config.bindHost,
-      clipboardEnabled: context.config.clipboard.enabled,
-      port: context.config.port,
+      bindHost: runtimeBind.bindHost,
+      clipboardEnabled: runtimeClipboardEnabled,
+      port: runtimeBind.port,
     };
   });
 
@@ -36,7 +41,53 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     return {
-      url: `http://${context.config.bindHost}:${context.config.port}`,
+      url: createShareUrl(runtimeBind.bindHost, runtimeBind.port),
+    };
+  });
+
+  app.patch("/api/config/bind", async (request, reply) => {
+    if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
+      return reply.code(401).send({ error: "Invalid agent auth token" });
+    }
+    const payload = request.body as { bindHost?: string; port?: number } | undefined;
+    const bindHost = payload?.bindHost?.trim();
+    const rawPort = payload?.port;
+    const nextPort = Number(rawPort);
+    if (!bindHost) {
+      return reply.code(400).send({ error: "bindHost is required" });
+    }
+    if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+      return reply.code(400).send({ error: "port must be a valid TCP port" });
+    }
+    if (!isLocalBind(bindHost) && !context.config.authToken) {
+      return reply.code(400).send({ error: "Non-local bind addresses require authToken." });
+    }
+    runtimeBind = { bindHost, port: nextPort };
+    return {
+      bindHost,
+      clipboardEnabled: runtimeClipboardEnabled,
+      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      ok: true,
+      port: nextPort,
+      shareUrl: createShareUrl(bindHost, nextPort),
+    };
+  });
+
+  app.patch("/api/config/clipboard", async (request, reply) => {
+    if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
+      return reply.code(401).send({ error: "Invalid agent auth token" });
+    }
+    const payload = request.body as { enabled?: unknown } | undefined;
+    if (typeof payload?.enabled !== "boolean") {
+      return reply.code(400).send({ error: "enabled must be a boolean" });
+    }
+    runtimeClipboardEnabled = payload.enabled;
+    return {
+      bindHost: runtimeBind.bindHost,
+      clipboardEnabled: runtimeClipboardEnabled,
+      message: `Clipboard sync ${runtimeClipboardEnabled ? "enabled" : "disabled"}`,
+      ok: true,
+      port: runtimeBind.port,
     };
   });
 
@@ -105,6 +156,18 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     const session = await context.sessionManager.create(payload.serial);
     return reply.code(201).send(session);
   });
+}
+
+function isLocalBind(bindHost: string): boolean {
+  return bindHost === "127.0.0.1" || bindHost === "localhost" || bindHost === "::1";
+}
+
+function createShareUrl(bindHost: string, port: number): string {
+  if (bindHost === "0.0.0.0" || bindHost === "::") {
+    return `http://127.0.0.1:${port}`;
+  }
+  const host = bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
+  return `http://${host}:${port}`;
 }
 
 function applyAliases<T extends { readonly model?: string | undefined; readonly serial: string }>(

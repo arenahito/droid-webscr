@@ -40,6 +40,25 @@ describe("HTTP agent client", () => {
       if (url.endsWith("/api/share-url")) {
         return jsonResponse({ url: "http://127.0.0.1:7391" });
       }
+      if (url.endsWith("/api/config/bind")) {
+        return jsonResponse({
+          bindHost: "127.0.0.1",
+          clipboardEnabled: true,
+          message: "Runtime bind updated",
+          ok: true,
+          port: 7400,
+          shareUrl: "http://127.0.0.1:7400",
+        });
+      }
+      if (url.endsWith("/api/config/clipboard")) {
+        return jsonResponse({
+          bindHost: "127.0.0.1",
+          clipboardEnabled: true,
+          message: "Clipboard sync enabled",
+          ok: true,
+          port: 7400,
+        });
+      }
       if (url.endsWith("/api/devices/scan")) {
         return jsonResponse({
           devices: [{ authorizationState: "authorized", serial: "emulator-5554" }],
@@ -56,6 +75,21 @@ describe("HTTP agent client", () => {
       port: 7391,
     });
     await expect(client.shareUrl?.()).resolves.toEqual({ url: "http://127.0.0.1:7391" });
+    await expect(client.saveRuntimeBind?.("127.0.0.1", 7400)).resolves.toEqual({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: true,
+      message: "Runtime bind updated",
+      ok: true,
+      port: 7400,
+      shareUrl: "http://127.0.0.1:7400",
+    });
+    await expect(client.saveRuntimeClipboard?.(true)).resolves.toEqual({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: true,
+      message: "Clipboard sync enabled",
+      ok: true,
+      port: 7400,
+    });
     await expect(client.scanDevices?.()).resolves.toEqual([
       { authorizationState: "authorized", serial: "emulator-5554" },
     ]);
@@ -76,6 +110,20 @@ describe("HTTP agent client", () => {
       expect.objectContaining({
         body: JSON.stringify({ alias: "Pixel Lab" }),
         method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:7391/api/config/bind",
+      expect.objectContaining({
+        body: JSON.stringify({ bindHost: "127.0.0.1", port: 7400 }),
+        method: "PATCH",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:7391/api/config/clipboard",
+      expect.objectContaining({
+        body: JSON.stringify({ enabled: true }),
+        method: "PATCH",
       }),
     );
   });

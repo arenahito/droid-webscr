@@ -5,22 +5,24 @@ import {
   Camera,
   Check,
   Clipboard,
-  Copy,
   Home,
   Keyboard,
+  List,
   Menu,
   MonitorSmartphone,
   MoreVertical,
   Moon,
   Power,
+  Play,
   RotateCcw,
   RotateCw,
-  Search,
+  Settings2,
   Smartphone,
   Square,
   Sun,
   Video,
   Volume2,
+  Wifi,
 } from "lucide-react";
 import {
   createFrameHeader,
@@ -70,7 +72,14 @@ export interface DroidWebscrAppProps {
 }
 
 type LogLevel = "all" | "info" | "warn" | "error";
-type DialogKind = "endpoint" | "rename" | "bind" | undefined;
+type DialogKind =
+  | "adb-scan"
+  | "endpoint"
+  | "rename"
+  | "bind"
+  | "power"
+  | "session-actions"
+  | undefined;
 
 const defaultSessionState: SessionState = {
   logs: [],
@@ -89,7 +98,7 @@ const designInitialLogs: readonly string[] = [
   "10:42:10.231 INFO   stream     Starting stream: 1344x2992@30fps bitrate=4Mbps transport=USB",
   "10:42:10.448 INFO   control    Input channel established",
   "10:42:11.004 WARN   encoder    Bitrate pressure detected; holding 4Mbps",
-  "10:42:12.773 INFO   clipboard  Clipboard sync disabled by policy",
+  "10:42:12.773 INFO   clipboard  Clipboard sync disabled",
   "10:42:14.092 INFO   session    Agent ready",
 ];
 
@@ -110,8 +119,17 @@ export function DroidWebscrApp({
   const [fps, setFps] = React.useState(30);
   const [rotation, setRotation] = React.useState(0);
   const [recording, setRecording] = React.useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [dialog, setDialog] = React.useState<DialogKind>();
   const [dialogValue, setDialogValue] = React.useState("");
+  const [bindHostDraft, setBindHostDraft] = React.useState(fallbackRuntimeConfig.bindHost);
+  const [bindPortDraft, setBindPortDraft] = React.useState(String(fallbackRuntimeConfig.port));
+  const [shareUrl, setShareUrl] = React.useState(
+    createShareUrl(fallbackRuntimeConfig.bindHost, fallbackRuntimeConfig.port),
+  );
+  const [selectedAdbSerial, setSelectedAdbSerial] = React.useState<string | undefined>();
+  const [adbDialogDevices, setAdbDialogDevices] = React.useState<readonly DeviceDescriptor[]>([]);
+  const [dialogDeviceSerial, setDialogDeviceSerial] = React.useState<string | undefined>();
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
@@ -171,57 +189,86 @@ export function DroidWebscrApp({
     if (!useDesignApiFallback) {
       void agentClient
         .getRuntimeConfig?.()
-        .then(setRuntimeConfig)
+        .then((config) => {
+          setRuntimeConfig(config);
+          setBindHostDraft(config.bindHost);
+          setBindPortDraft(String(config.port));
+          setShareUrl(createShareUrl(config.bindHost, config.port));
+        })
+        .catch(() => undefined);
+      void agentClient
+        .shareUrl?.()
+        .then((result) => setShareUrl(result.url))
         .catch(() => undefined);
     }
   }, [agentClient, refreshDevices, useDesignApiFallback]);
 
-  const startSession = async () => {
-    if (!state.selectedSerial) {
-      return;
-    }
-    dispatch({ type: "start-requested" });
-    try {
-      const session = await agentClient.createSession(state.selectedSerial);
-      dispatch({ session, type: "start-succeeded" });
-      const socket = sessionSocketFactory(session);
-      sessionSocketRef.current = socket;
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const pipeline = videoPipelineFactory(canvas, (message) => {
-          dispatch({ message, type: "failed" });
-        });
-        videoPipelineRef.current = pipeline;
-        socket.onFrame((frame) => {
-          const decoded = decodeFrame(frame);
-          if (
-            decoded.ok &&
-            decoded.value.header.type === MessageType.LogRecord &&
-            decoded.value.header.streamId === StreamId.Log
-          ) {
-            dispatch({ message: new TextDecoder().decode(decoded.value.payload), type: "log" });
-            return;
-          }
-          void pipeline.acceptFrame(frame).then((snapshot) => {
-            setVideoSnapshot(snapshot);
-            if (snapshot.pressure) {
-              dispatch({ message: "Decode pressure detected", type: "log" });
-            }
-            if (snapshot.lastError) {
-              dispatch({ message: `ERROR ${snapshot.lastError}`, type: "log" });
-            }
+  const openBindDialog = React.useCallback(() => {
+    setBindHostDraft(runtimeConfig.bindHost);
+    setBindPortDraft(String(runtimeConfig.port));
+    setShareUrl(createShareUrl(runtimeConfig.bindHost, runtimeConfig.port));
+    void agentClient
+      .shareUrl?.()
+      .then((result) => setShareUrl(result.url))
+      .catch(() => undefined);
+    setDialog("bind");
+  }, [agentClient, runtimeConfig]);
+
+  const startSessionForSerial = React.useCallback(
+    async (serial: string | undefined) => {
+      if (!serial || state.phase === "starting" || state.session) {
+        return;
+      }
+      dispatch({ serial, type: "select-device" });
+      dispatch({ type: "start-requested" });
+      try {
+        const session = await agentClient.createSession(serial);
+        dispatch({ session, type: "start-succeeded" });
+        const socket = sessionSocketFactory(session);
+        sessionSocketRef.current = socket;
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const pipeline = videoPipelineFactory(canvas, (message) => {
+            dispatch({ message, type: "failed" });
           });
+          videoPipelineRef.current = pipeline;
+          socket.onFrame((frame) => {
+            const decoded = decodeFrame(frame);
+            if (
+              decoded.ok &&
+              decoded.value.header.type === MessageType.LogRecord &&
+              decoded.value.header.streamId === StreamId.Log
+            ) {
+              dispatch({ message: new TextDecoder().decode(decoded.value.payload), type: "log" });
+              return;
+            }
+            void pipeline.acceptFrame(frame).then((snapshot) => {
+              setVideoSnapshot(snapshot);
+              if (snapshot.pressure) {
+                dispatch({ message: "Decode pressure detected", type: "log" });
+              }
+              if (snapshot.lastError) {
+                dispatch({ message: `ERROR ${snapshot.lastError}`, type: "log" });
+              }
+            });
+          });
+        }
+        await socket.waitUntilOpen();
+        await socket.send(createSessionHelloFrame(nextSequence(sequenceRef)));
+      } catch (error) {
+        dispatch({
+          message: error instanceof Error ? error.message : "Session creation failed",
+          type: "failed",
         });
       }
-      await socket.waitUntilOpen();
-      await socket.send(createSessionHelloFrame(nextSequence(sequenceRef)));
-    } catch (error) {
-      dispatch({
-        message: error instanceof Error ? error.message : "Session creation failed",
-        type: "failed",
-      });
-    }
-  };
+    },
+    [agentClient, sessionSocketFactory, state.phase, state.session, videoPipelineFactory],
+  );
+
+  const startSession = React.useCallback(
+    async () => startSessionForSerial(state.selectedSerial),
+    [startSessionForSerial, state.selectedSerial],
+  );
 
   const stopSession = React.useCallback(() => {
     sessionSocketRef.current?.close();
@@ -246,6 +293,41 @@ export function DroidWebscrApp({
     },
     [notify, sendControlFrame],
   );
+
+  const requestSystemAction = React.useCallback(
+    (action: SystemControlAction) => {
+      if (action === "power") {
+        setDialog("power");
+        return;
+      }
+      sendSystemAction(action);
+    },
+    [sendSystemAction],
+  );
+
+  const toggleClipboardSync = React.useCallback(async () => {
+    const enabled = !runtimeConfig.clipboardEnabled;
+    try {
+      const result = await agentClient.saveRuntimeClipboard?.(enabled);
+      const nextEnabled = result?.clipboardEnabled ?? enabled;
+      setRuntimeConfig((current) => ({
+        ...current,
+        bindHost: result?.bindHost ?? current.bindHost,
+        clipboardEnabled: nextEnabled,
+        port: result?.port ?? current.port,
+      }));
+      dispatch({
+        message: result?.message ?? `INFO Clipboard sync ${nextEnabled ? "enabled" : "disabled"}`,
+        type: "log",
+      });
+      notify(`Clipboard ${nextEnabled ? "enabled" : "disabled"}`);
+    } catch (error) {
+      dispatch({
+        message: error instanceof Error ? error.message : "Clipboard update failed",
+        type: "failed",
+      });
+    }
+  }, [agentClient, notify, runtimeConfig.clipboardEnabled]);
 
   const sendVideoReconfigure = React.useCallback(
     (nextBitrate: number, nextFps: number) => {
@@ -284,17 +366,21 @@ export function DroidWebscrApp({
     });
   }, [recording]);
 
-  const scanDevices = React.useCallback(async () => {
+  const scanDevices = React.useCallback(async (): Promise<
+    readonly DeviceDescriptor[] | undefined
+  > => {
     try {
       setLoadingDevices(true);
       const nextDevices = await (agentClient.scanDevices?.() ?? agentClient.listDevices());
       setDevices(nextDevices);
       notify("ADB scan complete");
+      return nextDevices;
     } catch (error) {
       dispatch({
         message: error instanceof Error ? error.message : "Device scan failed",
         type: "failed",
       });
+      return undefined;
     } finally {
       setLoadingDevices(false);
     }
@@ -302,7 +388,7 @@ export function DroidWebscrApp({
 
   const submitDialog = React.useCallback(async () => {
     const value = dialogValue.trim();
-    if (!value) {
+    if ((dialog === "endpoint" || dialog === "rename") && !value) {
       return;
     }
     try {
@@ -311,27 +397,79 @@ export function DroidWebscrApp({
         notify("Endpoint connected");
         await scanDevices();
       }
-      if (dialog === "rename" && selectedDevice) {
-        await agentClient.renameDevice?.(selectedDevice.serial, value);
+      const dialogDevice =
+        devices.find((device) => device.serial === dialogDeviceSerial) ?? selectedDevice;
+      if (dialog === "rename" && dialogDevice) {
+        await agentClient.renameDevice?.(dialogDevice.serial, value);
         setDevices((current) =>
           current.map((device) =>
-            device.serial === selectedDevice.serial ? { ...device, model: value } : device,
+            device.serial === dialogDevice.serial ? { ...device, model: value } : device,
           ),
         );
         notify("Device renamed");
       }
       if (dialog === "bind") {
-        notify(`Bind remains ${runtimeConfig.bindHost}:${runtimeConfig.port}`);
+        const bindHost = bindHostDraft.trim();
+        const bindPort = Number(bindPortDraft);
+        const host = bindHost.length > 0 ? bindHost : runtimeConfig.bindHost;
+        const port = Number.isFinite(bindPort) && bindPort > 0 ? bindPort : runtimeConfig.port;
+        const result = await agentClient.saveRuntimeBind?.(host, port);
+        setRuntimeConfig((current) => ({
+          ...current,
+          bindHost: result?.bindHost ?? host,
+          clipboardEnabled: result?.clipboardEnabled ?? current.clipboardEnabled,
+          port: result?.port ?? port,
+        }));
+        setShareUrl(result?.shareUrl ?? createShareUrl(host, port));
+        dispatch({
+          message:
+            result?.message ?? `WARN Agent bind address set to ${host}:${port}; restart required`,
+          type: "log",
+        });
+        notify(result?.ok ? "Bind updated" : "Bind saved locally");
+      }
+      if (dialog === "power") {
+        sendSystemAction("power");
+      }
+      if (dialog === "session-actions") {
+        notify("Session actions saved");
+      }
+      if (dialog === "adb-scan" && selectedAdbSerial) {
+        const selectedScannedDevice = adbDialogDevices.find(
+          (device) => device.serial === selectedAdbSerial,
+        );
+        if (selectedScannedDevice) {
+          dispatch({ serial: selectedScannedDevice.serial, type: "select-device" });
+          notify("ADB device connected");
+        }
       }
       setDialog(undefined);
+      setAdbDialogDevices([]);
       setDialogValue("");
+      setDialogDeviceSerial(undefined);
+      setSelectedAdbSerial(undefined);
     } catch (error) {
       dispatch({
         message: error instanceof Error ? error.message : "Agent operation failed",
         type: "failed",
       });
     }
-  }, [agentClient, dialog, dialogValue, notify, runtimeConfig, scanDevices, selectedDevice]);
+  }, [
+    agentClient,
+    adbDialogDevices,
+    bindHostDraft,
+    bindPortDraft,
+    devices,
+    dialog,
+    dialogDeviceSerial,
+    dialogValue,
+    notify,
+    runtimeConfig,
+    scanDevices,
+    selectedAdbSerial,
+    selectedDevice,
+    sendSystemAction,
+  ]);
 
   const sendKey = React.useCallback(
     (event: React.KeyboardEvent) => {
@@ -404,7 +542,12 @@ export function DroidWebscrApp({
   );
 
   return (
-    <main className="app-shell min-h-screen bg-background text-foreground">
+    <main
+      className={cn(
+        "app-shell min-h-screen bg-background text-foreground",
+        sidebarCollapsed && "sidebar-collapsed",
+      )}
+    >
       <Topbar
         bitrateMbps={bitrateMbps}
         fps={fps}
@@ -412,47 +555,67 @@ export function DroidWebscrApp({
         onReconfigure={sendVideoReconfigure}
         onRecord={toggleRecording}
         onRotate={(delta) => setRotation((current) => (current + delta + 360) % 360)}
+        onSessionActions={() => setDialog("session-actions")}
         onStart={() => void startSession()}
         onStop={stopSession}
+        onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
         phase={state.phase}
         recording={recording}
         selectedDevice={selectedDevice}
         session={state.session}
+        sidebarCollapsed={sidebarCollapsed}
         theme={theme}
       />
       <div className="main-grid">
-        <Sidebar
-          devices={devices}
-          loading={loadingDevices}
-          onConnectEndpoint={() => {
-            setDialog("endpoint");
-            setDialogValue("");
-          }}
-          onDisconnect={async (serial) => {
-            await agentClient.disconnectDevice?.(serial);
-            notify("Device disconnected");
-            await scanDevices();
-          }}
-          onRefresh={() => void scanDevices()}
-          onRename={() => {
-            setDialog("rename");
-            setDialogValue(selectedDevice?.model ?? "");
-          }}
-          onSelect={(serial) => dispatch({ serial, type: "select-device" })}
-          selectedSerial={state.selectedSerial}
-          accessPanel={
-            <AccessPanel
-              clipboardEnabled={runtimeConfig.clipboardEnabled}
-              host={runtimeConfig.bindHost}
-              onBind={() => {
-                setDialog("bind");
-                setDialogValue(`${runtimeConfig.bindHost}:${runtimeConfig.port}`);
-              }}
-              port={runtimeConfig.port}
-            />
-          }
-        />
+        {sidebarCollapsed ? null : (
+          <Sidebar
+            devices={devices}
+            loading={loadingDevices}
+            onConnectEndpoint={() => {
+              setDialog("endpoint");
+              setDialogValue("");
+            }}
+            onDisconnect={async (serial) => {
+              await agentClient.disconnectDevice?.(serial);
+              notify("Device disconnected");
+              await scanDevices();
+            }}
+            onOpenAdbScan={() => {
+              void scanDevices().then((nextDevices) => {
+                if (!nextDevices) {
+                  return;
+                }
+                setAdbDialogDevices(nextDevices);
+                setSelectedAdbSerial(nextDevices[0]?.serial);
+                setDialog("adb-scan");
+              });
+            }}
+            onRename={(device) => {
+              setDialogDeviceSerial(device.serial);
+              setDialog("rename");
+              setDialogValue(device.model ?? "");
+            }}
+            onSelect={(serial) => dispatch({ serial, type: "select-device" })}
+            onShowDeviceLog={(device) => {
+              const label = device.model ?? device.serial;
+              dispatch({ message: `INFO Showing logs for ${label}`, type: "log" });
+              notify(`Showing logs for ${label}`);
+            }}
+            onStartSession={(device) => void startSessionForSerial(device.serial)}
+            sessionActive={Boolean(state.session) || state.phase === "starting"}
+            selectedSerial={state.selectedSerial}
+            accessPanel={
+              <AccessPanel
+                clipboardEnabled={runtimeConfig.clipboardEnabled}
+                host={runtimeConfig.bindHost}
+                onBind={openBindDialog}
+                onClipboardToggle={toggleClipboardSync}
+                port={runtimeConfig.port}
+              />
+            }
+          />
+        )}
         <section className="viewport-grid bg-viewport">
           <AndroidViewport
             canvasRef={canvasRef}
@@ -473,7 +636,7 @@ export function DroidWebscrApp({
             textInputRef={textInputRef}
             videoSnapshot={videoSnapshot}
           />
-          <AndroidControls onSystemAction={sendSystemAction} />
+          <AndroidControls onSystemAction={requestSystemAction} />
         </section>
       </div>
       <LogDrawer
@@ -487,9 +650,48 @@ export function DroidWebscrApp({
       {dialog ? (
         <Dialog
           kind={dialog}
-          onCancel={() => setDialog(undefined)}
+          bindHost={bindHostDraft}
+          bindPort={bindPortDraft}
+          clipboardEnabled={runtimeConfig.clipboardEnabled}
+          devices={dialog === "adb-scan" ? adbDialogDevices : devices}
+          onCancel={() => {
+            setDialog(undefined);
+            setAdbDialogDevices([]);
+            setDialogDeviceSerial(undefined);
+            setSelectedAdbSerial(undefined);
+          }}
+          onCopyShareUrl={() => {
+            void navigator.clipboard?.writeText(shareUrl);
+            notify("Share URL copied");
+          }}
+          onRefreshDevices={() => {
+            void scanDevices().then((nextDevices) => {
+              if (!nextDevices) {
+                setAdbDialogDevices([]);
+                setSelectedAdbSerial(undefined);
+                return;
+              }
+              setAdbDialogDevices(nextDevices);
+              setSelectedAdbSerial((current) =>
+                nextDevices.some((device) => device.serial === current)
+                  ? current
+                  : nextDevices[0]?.serial,
+              );
+            });
+          }}
+          onSelectAdbDevice={setSelectedAdbSerial}
           onSubmit={() => void submitDialog()}
+          onBindHostChange={(value) => {
+            setBindHostDraft(value);
+            setShareUrl(createShareUrl(value, Number(bindPortDraft)));
+          }}
+          onBindPortChange={(value) => {
+            setBindPortDraft(value);
+            setShareUrl(createShareUrl(bindHostDraft, Number(value)));
+          }}
           onValueChange={setDialogValue}
+          selectedAdbSerial={selectedAdbSerial}
+          shareUrl={shareUrl}
           value={dialogValue}
         />
       ) : null}
@@ -505,13 +707,16 @@ function Topbar({
   onReconfigure,
   onRecord,
   onRotate,
+  onSessionActions,
   onStart,
   onStop,
+  onToggleSidebar,
   onTheme,
   phase,
   recording,
   selectedDevice,
   session,
+  sidebarCollapsed,
   theme,
 }: {
   readonly bitrateMbps: number;
@@ -520,19 +725,30 @@ function Topbar({
   readonly onReconfigure: (bitrateMbps: number, fps: number) => void;
   readonly onRecord: () => void;
   readonly onRotate: (delta: number) => void;
+  readonly onSessionActions: () => void;
   readonly onStart: () => void;
   readonly onStop: () => void;
+  readonly onToggleSidebar: () => void;
   readonly onTheme: () => void;
   readonly phase: SessionState["phase"];
   readonly recording: boolean;
   readonly selectedDevice: DeviceDescriptor | undefined;
   readonly session: SessionRecord | undefined;
+  readonly sidebarCollapsed: boolean;
   readonly theme: ThemePreference;
 }): React.ReactElement {
   const canStart = selectedDevice?.authorizationState === "authorized" && phase !== "starting";
   return (
     <header className="topbar">
-      <Button aria-label="Toggle sidebar" size="icon" variant="ghost">
+      <Button
+        aria-expanded={!sidebarCollapsed}
+        aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+        className="sidebar-toggle"
+        onClick={onToggleSidebar}
+        size="icon"
+        title="Toggle sidebar"
+        variant="ghost"
+      >
         <Menu aria-hidden="true" />
       </Button>
       <div className="brand">
@@ -552,7 +768,7 @@ function Topbar({
         </Button>
       ) : (
         <Button aria-label="Start" disabled={!canStart} onClick={onStart}>
-          <Power aria-hidden="true" data-icon="inline-start" />
+          <Play aria-hidden="true" data-icon="inline-start" />
           Start
         </Button>
       )}
@@ -618,7 +834,7 @@ function Topbar({
       >
         <Video aria-hidden="true" />
       </Button>
-      <Button aria-label="More actions" size="icon" variant="ghost">
+      <Button aria-label="More actions" onClick={onSessionActions} size="icon" variant="ghost">
         <MoreVertical aria-hidden="true" />
       </Button>
     </header>
@@ -631,9 +847,12 @@ function Sidebar({
   loading,
   onConnectEndpoint,
   onDisconnect,
-  onRefresh,
+  onOpenAdbScan,
   onRename,
   onSelect,
+  onShowDeviceLog,
+  onStartSession,
+  sessionActive,
   selectedSerial,
 }: {
   readonly accessPanel: React.ReactNode;
@@ -641,14 +860,17 @@ function Sidebar({
   readonly loading: boolean;
   readonly onConnectEndpoint: () => void;
   readonly onDisconnect: (serial: string) => Promise<void>;
-  readonly onRefresh: () => void;
-  readonly onRename: () => void;
+  readonly onOpenAdbScan: () => void;
+  readonly onRename: (device: DeviceDescriptor) => void;
   readonly onSelect: (serial: string) => void;
+  readonly onShowDeviceLog: (device: DeviceDescriptor) => void;
+  readonly onStartSession: (device: DeviceDescriptor) => void;
+  readonly sessionActive: boolean;
   readonly selectedSerial: string | undefined;
 }): React.ReactElement {
   const [openSerial, setOpenSerial] = React.useState<string | undefined>();
   return (
-    <aside className="sidebar">
+    <aside aria-label="Device and access controls" className="sidebar">
       <div className="sidebar-section">
         <div className="section-heading">
           <h2>DEVICES</h2>
@@ -696,15 +918,47 @@ function Sidebar({
                     <MoreVertical aria-hidden="true" />
                   </Button>
                 </div>
-                <div className="device-menu" hidden={openSerial !== device.serial}>
-                  <button onClick={() => onSelect(device.serial)} type="button">
+                <div className="device-menu" hidden={openSerial !== device.serial} role="menu">
+                  <button
+                    disabled={sessionActive}
+                    onClick={() => {
+                      onStartSession(device);
+                      setOpenSerial(undefined);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
                     Start session
                   </button>
-                  <button type="button">Show device log</button>
-                  <button onClick={onRename} type="button">
+                  <button
+                    onClick={() => {
+                      onShowDeviceLog(device);
+                      setOpenSerial(undefined);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    Show device log
+                  </button>
+                  <button
+                    onClick={() => {
+                      onRename(device);
+                      setOpenSerial(undefined);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
                     Rename device
                   </button>
-                  <button onClick={() => void onDisconnect(device.serial)} type="button">
+                  <button
+                    className="danger"
+                    onClick={() => {
+                      setOpenSerial(undefined);
+                      void onDisconnect(device.serial);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
                     Disconnect
                   </button>
                 </div>
@@ -715,12 +969,12 @@ function Sidebar({
       </div>
       <div className="sidebar-section">
         <h2>ADD DEVICE</h2>
-        <Button onClick={onRefresh} variant="outline">
-          <Search aria-hidden="true" data-icon="inline-start" />
+        <Button onClick={onOpenAdbScan} variant="outline">
+          <List aria-hidden="true" data-icon="inline-start" />
           Scan adb devices
         </Button>
         <Button onClick={onConnectEndpoint} variant="secondary">
-          <Copy aria-hidden="true" data-icon="inline-start" />
+          <Wifi aria-hidden="true" data-icon="inline-start" />
           Connect by endpoint
         </Button>
       </div>
@@ -733,18 +987,24 @@ function AccessPanel({
   clipboardEnabled,
   host,
   onBind,
+  onClipboardToggle,
   port,
 }: {
   readonly clipboardEnabled: boolean;
   readonly host: string;
   readonly onBind: () => void;
+  readonly onClipboardToggle: () => void;
   readonly port: number;
 }): React.ReactElement {
+  const clipboardTitle = `Clipboard sync ${clipboardEnabled ? "enabled" : "disabled"}`;
   return (
     <section className="access-panel">
       <h2>ACCESS</h2>
-      <button className="access-row access-action" onClick={onBind} type="button">
-        <span>Bind</span>
+      <button aria-label="Bind" className="access-row access-action" onClick={onBind} type="button">
+        <span>
+          <Settings2 aria-hidden="true" data-icon="inline-start" />
+          Bind
+        </span>
         <strong>{host}</strong>
         <span aria-hidden="true">&gt;</span>
       </button>
@@ -753,16 +1013,18 @@ function AccessPanel({
       </span>
       <span className="compat-text">Bind {host}</span>
       <button
-        aria-label={clipboardEnabled ? "Clipboard on" : "Clipboard off"}
+        aria-label="Toggle clipboard sync"
+        aria-pressed={clipboardEnabled}
         className="access-row access-action"
-        disabled={!clipboardEnabled}
+        onClick={onClipboardToggle}
+        title={clipboardTitle}
         type="button"
       >
         <span>
           <Clipboard aria-hidden="true" data-icon="inline-start" />
           Clipboard
         </span>
-        <span className={cn("switch-pill", clipboardEnabled && "on")}>
+        <span className={cn("switch-pill", clipboardEnabled && "on")} title={clipboardTitle}>
           <span />
         </span>
       </button>
@@ -972,16 +1234,38 @@ function LogDrawer({
 }
 
 function Dialog({
+  bindHost,
+  bindPort,
+  clipboardEnabled,
+  devices,
   kind,
   onCancel,
+  onBindHostChange,
+  onBindPortChange,
+  onCopyShareUrl,
+  onRefreshDevices,
+  onSelectAdbDevice,
   onSubmit,
   onValueChange,
+  selectedAdbSerial,
+  shareUrl,
   value,
 }: {
+  readonly bindHost: string;
+  readonly bindPort: string;
+  readonly clipboardEnabled: boolean;
+  readonly devices: readonly DeviceDescriptor[];
   readonly kind: Exclude<DialogKind, undefined>;
   readonly onCancel: () => void;
+  readonly onBindHostChange: (value: string) => void;
+  readonly onBindPortChange: (value: string) => void;
+  readonly onCopyShareUrl: () => void;
+  readonly onRefreshDevices: () => void;
+  readonly onSelectAdbDevice: (serial: string) => void;
   readonly onSubmit: () => void;
   readonly onValueChange: (value: string) => void;
+  readonly selectedAdbSerial: string | undefined;
+  readonly shareUrl: string;
   readonly value: string;
 }): React.ReactElement {
   const title =
@@ -989,22 +1273,174 @@ function Dialog({
       ? "Connect by endpoint"
       : kind === "rename"
         ? "Rename device"
-        : "Bind address";
+        : kind === "bind"
+          ? "Bind access"
+          : kind === "power"
+            ? "Power action"
+            : kind === "session-actions"
+              ? "Session actions"
+              : "Scan adb devices";
   return (
-    <div aria-label={title} className="dialog-backdrop" role="dialog">
+    <div
+      aria-label={title}
+      aria-labelledby="dialog-title"
+      className="dialog-backdrop"
+      role="dialog"
+    >
       <div className="dialog">
-        <h2>{title}</h2>
-        <input
-          autoFocus
-          onChange={(event) => onValueChange(event.target.value)}
-          placeholder={kind === "endpoint" ? "192.168.1.40:5555" : "Value"}
-          value={value}
-        />
-        <div>
-          <Button onClick={onCancel} variant="outline">
-            Cancel
-          </Button>
-          <Button onClick={onSubmit}>Apply</Button>
+        <div className="dialog-head">
+          <h2 id="dialog-title">{title}</h2>
+        </div>
+        <div className="dialog-body">
+          {kind === "bind" ? (
+            <>
+              <label className="field">
+                Bind address
+                <select
+                  aria-label="Bind address"
+                  onChange={(event) => onBindHostChange(event.target.value)}
+                  value={bindHost}
+                >
+                  <option value="127.0.0.1">127.0.0.1</option>
+                  <option value="0.0.0.0">0.0.0.0</option>
+                  <option value="192.168.1.20">192.168.1.20</option>
+                </select>
+              </label>
+              <label className="field">
+                Port
+                <input
+                  aria-label="Port"
+                  onChange={(event) => onBindPortChange(event.target.value)}
+                  type="number"
+                  value={bindPort}
+                />
+              </label>
+              <p className="status-note">
+                Non-local bind addresses allow any client that can reach this PC address to connect.
+                Authentication is required.
+              </p>
+              <label className="field">
+                Share URL
+                <input aria-label="Share URL" readOnly value={shareUrl} />
+              </label>
+            </>
+          ) : null}
+          {kind === "endpoint" || kind === "rename" ? (
+            <>
+              <label className="field">
+                {kind === "endpoint" ? "ADB endpoint" : "Display name"}
+                <input
+                  autoFocus
+                  onChange={(event) => onValueChange(event.target.value)}
+                  placeholder={kind === "endpoint" ? "192.168.1.40:5555" : "Value"}
+                  value={value}
+                />
+              </label>
+              {kind === "endpoint" ? (
+                <p>Use this when the device is not already visible in adb devices.</p>
+              ) : null}
+            </>
+          ) : null}
+          {kind === "power" ? (
+            <p>
+              Send a power-key event to the selected Android device. This is a guarded system
+              action.
+            </p>
+          ) : null}
+          {kind === "session-actions" ? (
+            <label className="field">
+              Reconnect policy
+              <select aria-label="Reconnect policy" defaultValue="auto">
+                <option value="auto">Auto reconnect</option>
+                <option value="manual">Manual reconnect</option>
+              </select>
+            </label>
+          ) : null}
+          {kind === "adb-scan" ? (
+            <>
+              <p>
+                Detected devices from adb devices -l. USB devices, running emulators, and already
+                connected network devices appear in the same list.
+              </p>
+              <div className="adb-device-list">
+                {devices.map((device) => (
+                  <button
+                    className={cn(
+                      "adb-device-row",
+                      selectedAdbSerial === device.serial && "selected",
+                    )}
+                    key={device.serial}
+                    onClick={() => onSelectAdbDevice(device.serial)}
+                    type="button"
+                  >
+                    <span>
+                      <span className="adb-device-name">{device.model ?? "Android device"}</span>
+                      <span className="adb-device-serial">{device.serial}</span>
+                    </span>
+                    <span className="adb-device-meta">
+                      <span>{device.authorizationState}</span>
+                      <span>{device.transportKind ?? "adb"}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {!clipboardEnabled && kind === "session-actions" ? (
+            <p className="status-note">Clipboard sync is currently disabled.</p>
+          ) : null}
+        </div>
+        <div className="dialog-actions">
+          {kind === "session-actions" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Close
+              </Button>
+              <Button onClick={onSubmit}>Apply</Button>
+            </>
+          ) : null}
+          {kind === "power" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Cancel
+              </Button>
+              <Button onClick={onSubmit} variant="outline">
+                Send power
+              </Button>
+            </>
+          ) : null}
+          {kind === "bind" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Cancel
+              </Button>
+              <Button onClick={onCopyShareUrl} variant="outline">
+                Copy share URL
+              </Button>
+              <Button onClick={onSubmit}>Save bind</Button>
+            </>
+          ) : null}
+          {kind === "adb-scan" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Close
+              </Button>
+              <Button onClick={onRefreshDevices} variant="outline">
+                Refresh
+              </Button>
+              <Button disabled={!selectedAdbSerial} onClick={onSubmit}>
+                Connect selected
+              </Button>
+            </>
+          ) : null}
+          {kind === "endpoint" || kind === "rename" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Cancel
+              </Button>
+              <Button onClick={onSubmit}>{kind === "endpoint" ? "Connect" : "Save"}</Button>
+            </>
+          ) : null}
         </div>
       </div>
     </div>
@@ -1050,6 +1486,15 @@ function designFallbackDevices(): readonly DeviceDescriptor[] {
       transportKind: "network",
     },
   ];
+}
+
+function createShareUrl(bindHost: string, port: number): string {
+  const nextPort = Number.isFinite(port) && port > 0 ? port : fallbackRuntimeConfig.port;
+  if (bindHost === "0.0.0.0" || bindHost === "::") {
+    return `http://127.0.0.1:${nextPort}`;
+  }
+  const host = bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
+  return `http://${host}:${nextPort}`;
 }
 
 function createDefaultSessionSocket(session: SessionRecord): SessionSocket {

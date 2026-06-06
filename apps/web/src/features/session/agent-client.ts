@@ -8,6 +8,8 @@ export interface AgentClient {
   getRuntimeConfig?(): Promise<RuntimeConfig>;
   listDevices(): Promise<readonly DeviceDescriptor[]>;
   renameDevice?(serial: string, alias: string): Promise<DeviceActionResult>;
+  saveRuntimeBind?(bindHost: string, port: number): Promise<RuntimeBindResult>;
+  saveRuntimeClipboard?(enabled: boolean): Promise<RuntimeClipboardResult>;
   scanDevices?(): Promise<readonly DeviceDescriptor[]>;
   shareUrl?(): Promise<ShareUrlResult>;
 }
@@ -22,6 +24,12 @@ export interface RuntimeConfig {
   readonly clipboardEnabled: boolean;
   readonly port: number;
 }
+
+export interface RuntimeBindResult extends DeviceActionResult, RuntimeConfig {
+  readonly shareUrl: string;
+}
+
+export interface RuntimeClipboardResult extends DeviceActionResult, RuntimeConfig {}
 
 export interface ShareUrlResult {
   readonly url: string;
@@ -80,6 +88,14 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
         { alias },
         headers,
       ),
+    saveRuntimeBind: async (bindHost, port) =>
+      postJson<RuntimeBindResult>(`${baseUrl}/api/config/bind`, { bindHost, port }, headers, {
+        method: "PATCH",
+      }),
+    saveRuntimeClipboard: async (enabled) =>
+      postJson<RuntimeClipboardResult>(`${baseUrl}/api/config/clipboard`, { enabled }, headers, {
+        method: "PATCH",
+      }),
     scanDevices: async () => {
       const response = await fetch(`${baseUrl}/api/devices/scan`, { headers, method: "POST" });
       if (!response.ok) {
@@ -102,11 +118,16 @@ function createAgentHeaders(authToken: string | undefined): HeadersInit {
   return authToken ? { authorization: `Bearer ${authToken}` } : {};
 }
 
-async function postJson<T>(url: string, body: unknown, headers: HeadersInit): Promise<T> {
+async function postJson<T>(
+  url: string,
+  body: unknown,
+  headers: HeadersInit,
+  options: { readonly method?: "PATCH" | "POST" } = {},
+): Promise<T> {
   const response = await fetch(url, {
     body: JSON.stringify(body),
     headers: { ...headers, "content-type": "application/json" },
-    method: "POST",
+    method: options.method ?? "POST",
   });
   if (!response.ok) {
     throw new Error(`Agent request failed with HTTP ${response.status}`);

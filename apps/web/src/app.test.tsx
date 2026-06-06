@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createFrameHeader,
   decodeFrame,
@@ -33,7 +33,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Clipboard off" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toBeEnabled();
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
   });
 
@@ -64,6 +64,47 @@ describe("DroidWebscrApp", () => {
     await user.click(await screen.findByRole("button", { name: "Scan adb devices" }));
 
     expect(await screen.findAllByText("adb unavailable")).toHaveLength(2);
+    expect(screen.queryByRole("dialog", { name: "Scan adb devices" })).not.toBeInTheDocument();
+  });
+
+  it("keeps stale scan results out of the adb dialog after refresh failures", async () => {
+    const user = userEvent.setup();
+    let shouldFailRefresh = false;
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
+          listDevices: async () => [],
+          scanDevices: async () => {
+            if (shouldFailRefresh) {
+              throw new Error("adb unavailable");
+            }
+            return [
+              {
+                authorizationState: "authorized",
+                model: "Pixel 8",
+                serial: "emulator-5554",
+                transportKind: "emulator",
+              },
+            ];
+          },
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Scan adb devices" }));
+    const scanDialog = screen.getByRole("dialog", { name: "Scan adb devices" });
+    expect(scanDialog).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect selected" })).toBeEnabled();
+    expect(within(scanDialog).getByText("emulator-5554")).toBeInTheDocument();
+
+    shouldFailRefresh = true;
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("adb unavailable")).toBeInTheDocument();
+    expect(within(scanDialog).queryByText("emulator-5554")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect selected" })).toBeDisabled();
   });
 
   it("uses fallback messages for non-Error failures", async () => {
@@ -660,6 +701,274 @@ describe("DroidWebscrApp", () => {
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
 
     expect(within(logDrawer).getByText("No logs")).toBeInTheDocument();
+  });
+
+  it("matches the design interaction contract for chrome, access, and guarded actions", async () => {
+    const user = userEvent.setup();
+    const storage = createMemoryStorage();
+    const saveRuntimeBind = vi.fn(async (bindHost: string, port: number) => ({
+      bindHost,
+      clipboardEnabled: false,
+      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      ok: true,
+      port,
+      shareUrl: `http://${bindHost}:${port}`,
+    }));
+    const saveRuntimeClipboard = vi.fn(async (enabled: boolean) => ({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: enabled,
+      message: `Clipboard sync ${enabled ? "enabled" : "disabled"}`,
+      ok: true,
+      port: 7391,
+    }));
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          getRuntimeConfig: async () => ({
+            bindHost: "127.0.0.1",
+            clipboardEnabled: false,
+            port: 7391,
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+          saveRuntimeBind,
+          saveRuntimeClipboard,
+          shareUrl: async () => ({ url: "http://127.0.0.1:7391" }),
+        }}
+        storage={storage}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    expect(screen.queryByRole("complementary", { name: "Device and access controls" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(screen.getByRole("complementary", { name: "Device and access controls" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("dialog", { name: "Session actions" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Reconnect policy")).toHaveValue("auto");
+    await user.click(screen.getByRole("button", { name: "Close" }));
+
+    await user.click(screen.getByRole("button", { name: "Bind" }));
+    expect(screen.getByRole("dialog", { name: "Bind access" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Bind address" })).toHaveValue("127.0.0.1");
+    expect(screen.getByLabelText("Port")).toHaveValue(7391);
+    expect(screen.getByLabelText("Share URL")).toHaveValue("http://127.0.0.1:7391");
+    expect(screen.getByText(/Non-local bind addresses allow/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy share URL" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save bind" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save bind" }));
+    expect(saveRuntimeBind).toHaveBeenCalledWith("127.0.0.1", 7391);
+    expect(
+      await screen.findByText(
+        "Runtime bind updated; restart the agent to move the listening socket.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Bind" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    const clipboard = screen.getByRole("button", { name: "Toggle clipboard sync" });
+    expect(clipboard).toBeEnabled();
+    expect(clipboard).toHaveAttribute("aria-pressed", "false");
+    await user.click(clipboard);
+    expect(saveRuntimeClipboard).toHaveBeenCalledWith(true);
+    expect(await screen.findByText("Clipboard sync enabled")).toBeInTheDocument();
+    expect(clipboard).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Power" }));
+    expect(screen.getByRole("dialog", { name: "Power action" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send power" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+  });
+
+  it("renders clipboard as the runtime setting source of truth", async () => {
+    const user = userEvent.setup();
+    const saveRuntimeClipboard = vi.fn(async (enabled: boolean) => ({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: enabled,
+      message: `Clipboard sync ${enabled ? "enabled" : "disabled"}`,
+      ok: true,
+      port: 7391,
+    }));
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          getRuntimeConfig: async () => ({
+            bindHost: "127.0.0.1",
+            clipboardEnabled: true,
+            port: 7391,
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+          saveRuntimeClipboard,
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    const clipboard = await screen.findByRole("button", { name: "Toggle clipboard sync" });
+    expect(clipboard).toHaveAttribute("aria-pressed", "true");
+    expect(clipboard).toHaveAttribute("title", "Clipboard sync enabled");
+
+    await user.click(clipboard);
+
+    expect(saveRuntimeClipboard).toHaveBeenCalledWith(false);
+    expect(await screen.findByText("Clipboard sync disabled")).toBeInTheDocument();
+    expect(clipboard).toHaveAttribute("aria-pressed", "false");
+    expect(clipboard).toHaveAttribute("title", "Clipboard sync disabled");
+    expect(screen.queryByText(/policy/i)).not.toBeInTheDocument();
+  });
+
+  it("matches the design interaction contract for device menus and adb scanning", async () => {
+    const user = userEvent.setup();
+    const createdSessions: string[] = [];
+    const renamed: Array<readonly [string, string]> = [];
+    let scanCalls = 0;
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async (serial) => {
+            createdSessions.push(serial);
+            return {
+              sessionId: `s-${serial}`,
+              serial,
+              token: "token-emulator",
+            };
+          },
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+            {
+              authorizationState: "authorized",
+              model: "Pixel 6",
+              serial: "R5CW70ABC12",
+              transportKind: "usb",
+            },
+          ],
+          renameDevice: async (serial, alias) => {
+            renamed.push([serial, alias]);
+            return { message: "renamed", ok: true };
+          },
+          scanDevices: async () => {
+            scanCalls += 1;
+            return [
+              {
+                authorizationState: "authorized",
+                model: "Pixel 8",
+                serial: "emulator-5554",
+                transportKind: "emulator",
+              },
+              {
+                authorizationState: "authorized",
+                model: "Pixel 6",
+                serial: "R5CW70ABC12",
+                transportKind: "usb",
+              },
+            ];
+          },
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    let menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Show device log" }));
+    expect(await screen.findByText("Showing logs for Pixel 6")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Rename device" }));
+    await user.clear(screen.getByLabelText("Display name"));
+    await user.type(screen.getByLabelText("Display name"), "Lab Pixel");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(renamed).toEqual([["R5CW70ABC12", "Lab Pixel"]]);
+
+    await user.click(screen.getByRole("button", { name: "Open Lab Pixel menu" }));
+    menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
+    expect(createdSessions).toEqual(["R5CW70ABC12"]);
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await user.click(screen.getByRole("button", { name: "Scan adb devices" }));
+    expect(scanCalls).toBe(1);
+    expect(screen.getByRole("dialog", { name: "Scan adb devices" })).toBeInTheDocument();
+    expect(screen.getByText(/Detected devices from adb devices -l/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Connect selected" })).toBeEnabled();
+  });
+
+  it("starts sessions from the selected device card menu", async () => {
+    const user = userEvent.setup();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async (serial) => ({
+            sessionId: `s-${serial}`,
+            serial,
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+          scanDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+    await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
+    const menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
+
+    expect(await screen.findByText("Session s-emulator-5554")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
+    expect(
+      within(screen.getByRole("menu")).getByRole("menuitem", { name: "Start session" }),
+    ).toBeDisabled();
   });
 
   it("uses browser localStorage when no storage override is provided", async () => {

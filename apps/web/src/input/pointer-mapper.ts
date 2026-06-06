@@ -1,6 +1,6 @@
-import { createFrameHeader, encodeFrame, MessageType, StreamId } from "@droid-webscr/protocol";
+import { createPointerControlFrame } from "@droid-webscr/protocol";
 
-export type PointerAction = "down" | "move" | "up";
+export type PointerAction = "down" | "move" | "up" | "cancel";
 
 export interface DisplaySize {
   readonly height: number;
@@ -41,40 +41,28 @@ export function fitViewport(
 }
 
 export function mapPointerToControlFrame(input: PointerControlInput): Uint8Array {
+  if (input.viewport.width <= 0 || input.viewport.height <= 0) {
+    throw new Error("Viewport dimensions must be positive.");
+  }
   const x = clampToInt(input.x - input.viewport.left, 0, input.viewport.width);
   const y = clampToInt(input.y - input.viewport.top, 0, input.viewport.height);
-  const deviceX = Math.round((x / input.viewport.width) * input.display.width);
-  const deviceY = Math.round((y / input.viewport.height) * input.display.height);
-  const payload = new Uint8Array(20);
-  const view = new DataView(payload.buffer);
-
-  view.setUint8(0, encodePointerAction(input.action));
-  view.setUint16(2, input.pointerId, false);
-  view.setUint32(4, deviceX, false);
-  view.setUint32(8, deviceY, false);
-  view.setUint8(12, Math.round(clamp(input.pressure, 0, 1) * 255));
-  view.setUint16(14, input.buttons, false);
-  view.setUint32(16, 0, false);
-
-  return encodeFrame({
-    header: createFrameHeader({
-      payloadLength: payload.byteLength,
-      ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
-      streamId: StreamId.Control,
-      type: MessageType.ControlPointer,
-    }),
-    payload,
+  return createPointerControlFrame({
+    action: input.action,
+    buttons: input.buttons,
+    pointerId: input.pointerId,
+    pressure: input.pressure,
+    sequence: input.sequence,
+    x: clampToInt(
+      Math.round((x / input.viewport.width) * input.display.width),
+      0,
+      input.display.width - 1,
+    ),
+    y: clampToInt(
+      Math.round((y / input.viewport.height) * input.display.height),
+      0,
+      input.display.height - 1,
+    ),
   });
-}
-
-function encodePointerAction(action: PointerAction): number {
-  if (action === "down") {
-    return 1;
-  }
-  if (action === "move") {
-    return 2;
-  }
-  return 3;
 }
 
 function clampToInt(value: number, min: number, max: number): number {

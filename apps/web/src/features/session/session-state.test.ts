@@ -13,11 +13,17 @@ describe("session state", () => {
       type: "start-succeeded",
     });
     const failed = reduceSessionState(connected, { message: "socket closed", type: "failed" });
+    const logged = reduceSessionState(connected, {
+      message: "Decode pressure detected",
+      type: "log",
+    });
     const stopped = reduceSessionState(failed, { type: "stop" });
 
     expect(starting.phase).toBe("starting");
     expect(connected.session?.sessionId).toBe("s1");
     expect(failed.logs.at(-1)).toBe("socket closed");
+    expect(logged.phase).toBe("connected");
+    expect(logged.logs.at(-1)).toBe("Decode pressure detected");
     expect(stopped).toMatchObject({ phase: "idle", selectedSerial: "emulator-5554" });
   });
 });

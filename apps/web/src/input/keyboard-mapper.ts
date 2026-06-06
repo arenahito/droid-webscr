@@ -1,4 +1,4 @@
-import { createFrameHeader, encodeFrame, MessageType, StreamId } from "@droid-webscr/protocol";
+import { createKeyControlFrame } from "@droid-webscr/protocol";
 
 export type KeyAction = "down" | "up";
 
@@ -27,20 +27,11 @@ export function mapKeyboardToControlFrame(input: KeyboardControlInput): Uint8Arr
     return undefined;
   }
 
-  const payload = new Uint8Array(12);
-  const view = new DataView(payload.buffer);
-  view.setUint8(0, input.action === "down" ? 1 : 2);
-  view.setUint16(2, keycode, false);
-  view.setUint32(4, input.metaState, false);
-  view.setUint32(8, input.repeat, false);
-
-  return encodeFrame({
-    header: createFrameHeader({
-      payloadLength: payload.byteLength,
-      ...(input.sequence === undefined ? {} : { sequence: input.sequence }),
-      streamId: StreamId.Control,
-      type: MessageType.ControlKey,
-    }),
-    payload,
+  return createKeyControlFrame({
+    action: input.action,
+    keyCode: keycode,
+    metaState: input.metaState,
+    repeat: input.repeat,
+    sequence: input.sequence,
   });
 }

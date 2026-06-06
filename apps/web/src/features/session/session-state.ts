@@ -16,6 +16,7 @@ export type SessionAction =
   | { readonly type: "start-requested" }
   | { readonly session: SessionRecord; readonly type: "start-succeeded" }
   | { readonly message: string; readonly type: "failed" }
+  | { readonly message: string; readonly type: "log" }
   | { readonly type: "stop" }
   | { readonly type: "clear-logs" };
 
@@ -35,6 +36,8 @@ export function reduceSessionState(state: SessionState, action: SessionAction): 
       };
     case "failed":
       return { ...state, logs: [...state.logs, action.message], phase: "error" };
+    case "log":
+      return { ...state, logs: [...state.logs, action.message] };
     case "stop":
       return {
         ...state,

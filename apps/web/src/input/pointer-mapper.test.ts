@@ -33,7 +33,7 @@ describe("pointer mapper", () => {
     expect(decoded.value.header.type).toBe(MessageType.ControlPointer);
     expect(decoded.value.header.streamId).toBe(StreamId.Control);
     expect([...decoded.value.payload]).toEqual([
-      1, 0, 0, 7, 0, 0, 2, 28, 0, 0, 3, 192, 128, 0, 0, 1, 0, 0, 0, 0,
+      0, 0, 0, 7, 0, 0, 2, 28, 0, 0, 3, 192, 128, 0, 0, 1, 0, 0, 0, 0,
     ]);
   });
 
@@ -64,8 +64,37 @@ describe("pointer mapper", () => {
     );
 
     expect(move.ok && [...move.value.payload].slice(0, 13)).toEqual([
-      2, 0, 0, 1, 0, 0, 0, 100, 0, 0, 0, 0, 255,
+      1, 0, 0, 1, 0, 0, 0, 99, 0, 0, 0, 0, 255,
     ]);
-    expect(up.ok && up.value.payload[0]).toBe(3);
+    expect(up.ok && up.value.payload[0]).toBe(2);
+  });
+
+  it("never emits coordinates outside Android exclusive display bounds", () => {
+    const frame = decodeFrame(
+      mapPointerToControlFrame({
+        action: "down",
+        buttons: 1,
+        display: { height: 200, rotation: 0, width: 100 },
+        pointerId: 0,
+        pressure: 1,
+        viewport: { height: 10, left: 0, top: 0, width: 10 },
+        x: 10,
+        y: 10,
+      }),
+    );
+
+    expect(frame.ok && [...frame.value.payload].slice(4, 12)).toEqual([0, 0, 0, 99, 0, 0, 0, 199]);
+    expect(() =>
+      mapPointerToControlFrame({
+        action: "down",
+        buttons: 1,
+        display: { height: 200, rotation: 0, width: 100 },
+        pointerId: 0,
+        pressure: 1,
+        viewport: { height: 0, left: 0, top: 0, width: 10 },
+        x: 0,
+        y: 0,
+      }),
+    ).toThrow("Viewport dimensions must be positive.");
   });
 });

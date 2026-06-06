@@ -7,6 +7,7 @@ export interface BinarySocket {
   addEventListener(event: "error", listener: (event: Event) => void): void;
   addEventListener(event: "message", listener: (event: { readonly data: unknown }) => void): void;
   addEventListener(event: "open", listener: () => void): void;
+  close(): void;
   send(data: Uint8Array): void;
 }
 
@@ -62,6 +63,10 @@ export class SessionSocket {
   public async send(frame: Uint8Array): Promise<void> {
     this.socket.send(frame);
   }
+
+  public close(): void {
+    this.socket.close();
+  }
 }
 
 class NativeBinarySocketAdapter implements BinarySocket {
@@ -104,12 +109,17 @@ class NativeBinarySocketAdapter implements BinarySocket {
     bytes.set(data);
     this.socket.send(bytes.buffer);
   }
+
+  public close(): void {
+    this.socket.close();
+  }
 }
 
 export class FakeBinaryWebSocket implements BinarySocket {
   public binaryType: BinaryType = "blob";
   public readyState = 0;
   public readonly sent: Uint8Array[] = [];
+  public closed = false;
   private readonly errorListeners: Array<(event: Event) => void> = [];
   private readonly listeners: Array<(event: { readonly data: unknown }) => void> = [];
   private readonly openListeners: Array<() => void> = [];
@@ -155,5 +165,9 @@ export class FakeBinaryWebSocket implements BinarySocket {
 
   public send(data: Uint8Array): void {
     this.sent.push(data);
+  }
+
+  public close(): void {
+    this.closed = true;
   }
 }

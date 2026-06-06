@@ -84,6 +84,10 @@ describe("session socket", () => {
         }
         this.sent = data;
       }
+
+      public close(): void {
+        this.readyState = 3;
+      }
     }
     vi.stubGlobal("WebSocket", NativeSocketStub);
 
@@ -107,8 +111,10 @@ describe("session socket", () => {
     await expect(opened).resolves.toBeUndefined();
     await session.send(new Uint8Array([9, 8, 7]).subarray(1));
     socket?.emit("message", { data: new Uint8Array([4, 3]).buffer });
+    session.close();
 
     expect(socket?.sent ? Array.from(new Uint8Array(socket.sent)) : []).toEqual([8, 7]);
+    expect(socket?.readyState).toBe(3);
     expect(received).toEqual([[4, 3]]);
   });
 

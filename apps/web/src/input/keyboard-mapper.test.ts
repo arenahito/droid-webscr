@@ -23,7 +23,7 @@ describe("keyboard mapper", () => {
     }
     expect(decoded.value.header.type).toBe(MessageType.ControlKey);
     expect(decoded.value.header.streamId).toBe(StreamId.Control);
-    expect([...decoded.value.payload]).toEqual([1, 0, 0, 67, 0, 0, 0, 1, 0, 0, 0, 2]);
+    expect([...decoded.value.payload]).toEqual([0, 0, 0, 67, 0, 0, 0, 1, 0, 0, 0, 2]);
   });
 
   it("returns undefined for unmapped browser keys", () => {
@@ -45,6 +45,6 @@ describe("keyboard mapper", () => {
     }
     const decoded = decodeFrame(frame);
 
-    expect(decoded.ok && decoded.value.payload[0]).toBe(2);
+    expect(decoded.ok && decoded.value.payload[0]).toBe(1);
   });
 });

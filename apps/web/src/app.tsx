@@ -1,6 +1,5 @@
 import * as React from "react";
 import {
-  Activity,
   ArrowLeft,
   Camera,
   Check,
@@ -62,6 +61,8 @@ import { cn } from "./lib/utils.js";
 import { createCanvasRenderer } from "./renderer/canvas-renderer.js";
 import { applyTheme, persistTheme, readTheme, ThemePreference } from "./theme/theme.js";
 import { createSessionSocket, SessionSocket } from "./transport/session-socket.js";
+
+const disconnectedPhoneIconUrl = new URL("./assets/disconnected-phone.png", import.meta.url).href;
 
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
@@ -256,6 +257,30 @@ export function DroidWebscrApp({
     setDialog("bind");
   }, [agentClient, runtimeConfig]);
 
+  const finishSession = React.useCallback(
+    (options: {
+      readonly closeSocket: boolean;
+      readonly expectedSocket?: SessionSocket | undefined;
+    }) => {
+      const socket = sessionSocketRef.current;
+      if (options.expectedSocket && socket !== options.expectedSocket) {
+        return;
+      }
+      const pipeline = videoPipelineRef.current;
+      sessionSocketRef.current = undefined;
+      videoPipelineRef.current = undefined;
+      if (options.closeSocket) {
+        socket?.close();
+      }
+      pipeline?.close();
+      clearCanvas(canvasRef.current);
+      setVideoSnapshot(undefined);
+      setRecording(false);
+      dispatch({ type: "stop" });
+    },
+    [],
+  );
+
   const startSessionForSerial = React.useCallback(
     async (serial: string | undefined) => {
       if (!serial || state.phase === "starting" || state.session) {
@@ -268,6 +293,9 @@ export function DroidWebscrApp({
         dispatch({ session, type: "start-succeeded" });
         const socket = sessionSocketFactory(session);
         sessionSocketRef.current = socket;
+        socket.onClose(() => {
+          finishSession({ closeSocket: false, expectedSocket: socket });
+        });
         const canvas = canvasRef.current;
         if (canvas) {
           const pipeline = videoPipelineFactory(canvas, (message) => {
@@ -285,6 +313,9 @@ export function DroidWebscrApp({
               return;
             }
             void pipeline.acceptFrame(frame).then((snapshot) => {
+              if (sessionSocketRef.current !== socket || videoPipelineRef.current !== pipeline) {
+                return;
+              }
               setVideoSnapshot(snapshot);
               if (snapshot.pressure) {
                 dispatch({ message: "Decode pressure detected", type: "log" });
@@ -304,7 +335,14 @@ export function DroidWebscrApp({
         });
       }
     },
-    [agentClient, sessionSocketFactory, state.phase, state.session, videoPipelineFactory],
+    [
+      agentClient,
+      finishSession,
+      sessionSocketFactory,
+      state.phase,
+      state.session,
+      videoPipelineFactory,
+    ],
   );
 
   const startSession = React.useCallback(
@@ -313,14 +351,8 @@ export function DroidWebscrApp({
   );
 
   const stopSession = React.useCallback(() => {
-    sessionSocketRef.current?.close();
-    sessionSocketRef.current = undefined;
-    videoPipelineRef.current?.close();
-    videoPipelineRef.current = undefined;
-    setVideoSnapshot(undefined);
-    setRecording(false);
-    dispatch({ type: "stop" });
-  }, []);
+    finishSession({ closeSocket: true });
+  }, [finishSession]);
 
   const sendControlFrame = React.useCallback(async (frame: Uint8Array) => {
     await sessionSocketRef.current?.send(frame);
@@ -577,8 +609,13 @@ export function DroidWebscrApp({
 
   React.useEffect(
     () => () => {
-      sessionSocketRef.current?.close();
-      videoPipelineRef.current?.close();
+      const socket = sessionSocketRef.current;
+      const pipeline = videoPipelineRef.current;
+      sessionSocketRef.current = undefined;
+      videoPipelineRef.current = undefined;
+      socket?.close();
+      pipeline?.close();
+      clearCanvas(canvasRef.current);
     },
     [],
   );
@@ -1163,7 +1200,7 @@ function AndroidViewport({
             spellCheck={false}
             tabIndex={-1}
           />
-          {videoSnapshot?.configured ? null : <MockAndroidHome status={status} />}
+          {videoSnapshot?.configured ? null : <DisconnectedPhonePlaceholder status={status} />}
         </div>
       </div>
     </section>
@@ -1245,34 +1282,23 @@ export function createPhoneStyle(
   };
 }
 
-function MockAndroidHome({
+function clearCanvas(canvas: HTMLCanvasElement | null): void {
+  if (!canvas) {
+    return;
+  }
+  const width = canvas.width;
+  canvas.width = width;
+}
+
+function DisconnectedPhonePlaceholder({
   status,
 }: {
   readonly status: { readonly detail: string; readonly title: string };
 }): React.ReactElement {
   return (
-    <div className="mock-home">
-      <div className="weather">
-        <span>Fri, May 24</span>
-        <strong>18 C</strong>
-      </div>
-      <div className="app-grid">
-        {["Play Store", "Gmail", "Photos", "YouTube", "Phone", "Messages", "Chrome", "Camera"].map(
-          (label) => (
-            <div className="mock-app" key={label}>
-              <span>{label.charAt(label === "Play Store" ? 2 : 0)}</span>
-              <small>{label}</small>
-            </div>
-          ),
-        )}
-      </div>
-      <div className="searchbar">
-        <span>G</span>
-        <strong>Mic Lens</strong>
-      </div>
-      <div className="gesture" />
+    <div className="disconnected-placeholder">
+      <img alt="Disconnected Android screen" src={disconnectedPhoneIconUrl} />
       <div className="viewport-status compat-text">
-        <Activity aria-hidden="true" />
         <strong>{status.title}</strong>
         <small>{status.detail}</small>
       </div>

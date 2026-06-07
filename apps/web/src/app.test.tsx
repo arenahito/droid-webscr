@@ -64,7 +64,10 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toBeEnabled();
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
     expect(screen.queryByText("Wi-Fi 100%")).not.toBeInTheDocument();
+    expect(screen.queryByText("Play Store")).not.toBeInTheDocument();
+    expect(screen.queryByText("Mic Lens")).not.toBeInTheDocument();
     expect(
       document
         .querySelector<HTMLElement>(".phone-shell")
@@ -212,6 +215,7 @@ describe("DroidWebscrApp", () => {
 
     expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
     expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
   });
 
   it("opens the binary session socket and sends video and system control frames", async () => {
@@ -291,6 +295,220 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(socket.closed).toBe(true);
     expect(pipeline.closed).toBe(true);
+    expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
+  });
+
+  it("returns to the disconnected placeholder when the session socket closes remotely", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const pipeline = new FakeVideoPipeline({
+      configured: true,
+      decodedFrames: 1,
+      droppedFrames: 0,
+      lastError: undefined,
+      pressure: false,
+      status: "ready",
+      videoSize: { height: 1280, width: 720 },
+    });
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipeline}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    expect(await screen.findByText("Video ready")).toBeInTheDocument();
+
+    socket.remoteClose();
+
+    await waitFor(() => expect(pipeline.closed).toBe(true));
+    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
+    expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
+    expect(screen.queryByText("Video ready")).not.toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
+  });
+
+  it("ignores stale close events from an older session socket", async () => {
+    const user = userEvent.setup();
+    const sockets = [new FakeBinaryWebSocket(), new FakeBinaryWebSocket()];
+    const pipelines = [
+      new FakeVideoPipeline({
+        configured: true,
+        decodedFrames: 1,
+        droppedFrames: 0,
+        lastError: undefined,
+        pressure: false,
+        status: "ready",
+        videoSize: { height: 1280, width: 720 },
+      }),
+      new FakeVideoPipeline({
+        configured: true,
+        decodedFrames: 1,
+        droppedFrames: 0,
+        lastError: undefined,
+        pressure: false,
+        status: "ready",
+        videoSize: { height: 1920, width: 860 },
+      }),
+    ];
+    let sessionIndex = 0;
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: `s-${++sessionIndex}`,
+            serial: "emulator-5554",
+            token: `token-${sessionIndex}`,
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(sockets[sessionIndex - 1]!)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipelines[sessionIndex - 1]!}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    sockets[0]!.open();
+    await screen.findByText("Session s-1");
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(pipelines[0]!.closed).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    sockets[1]!.open();
+    await screen.findByText("Session s-2");
+    sockets[0]!.remoteClose();
+
+    expect(screen.getByText("Session s-2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    expect(pipelines[1]!.closed).toBe(false);
+  });
+
+  it("ignores delayed video snapshots after a session has stopped", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const pipeline = new DeferredVideoPipeline();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipeline}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+
+    pipeline.resolve({
+      configured: true,
+      decodedFrames: 1,
+      droppedFrames: 0,
+      lastError: undefined,
+      pressure: false,
+      status: "ready",
+      videoSize: { height: 1280, width: 720 },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Video ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
+  });
+
+  it("ignores delayed socket close events after unmount cleanup", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const pipeline = new FakeVideoPipeline({
+      configured: true,
+      decodedFrames: 1,
+      droppedFrames: 0,
+      lastError: undefined,
+      pressure: false,
+      status: "ready",
+      videoSize: { height: 1280, width: 720 },
+    });
+    const { unmount } = render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipeline}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+
+    unmount();
+
+    expect(socket.closed).toBe(true);
+    expect(pipeline.closed).toBe(true);
+    expect(() => socket.remoteClose()).not.toThrow();
   });
 
   it("shows unsupported decoder state from the video pipeline", async () => {
@@ -1089,5 +1307,40 @@ class FakeVideoPipeline implements VideoPipeline {
 
   public snapshot(): VideoPipelineSnapshot {
     return this.nextSnapshot;
+  }
+}
+
+class DeferredVideoPipeline implements VideoPipeline {
+  public closed = false;
+  private resolveFrame: ((snapshot: VideoPipelineSnapshot) => void) | undefined;
+
+  public acceptFrame(): Promise<VideoPipelineSnapshot> {
+    return new Promise((resolve) => {
+      this.resolveFrame = resolve;
+    });
+  }
+
+  public close(): void {
+    this.closed = true;
+  }
+
+  public reset(): void {
+    return;
+  }
+
+  public resolve(snapshot: VideoPipelineSnapshot): void {
+    this.resolveFrame?.(snapshot);
+  }
+
+  public snapshot(): VideoPipelineSnapshot {
+    return {
+      configured: false,
+      decodedFrames: 0,
+      droppedFrames: 0,
+      lastError: undefined,
+      pressure: false,
+      status: "idle",
+      videoSize: undefined,
+    };
   }
 }

@@ -32,6 +32,19 @@ describe("session socket", () => {
     ]);
   });
 
+  it("notifies when the remote socket closes", () => {
+    const socket = new FakeBinaryWebSocket();
+    const session = new SessionSocket(socket);
+    const closed = vi.fn();
+    session.onClose(closed);
+
+    socket.remoteClose();
+
+    expect(closed).toHaveBeenCalledOnce();
+    expect(socket.closed).toBe(true);
+    expect(socket.readyState).toBe(3);
+  });
+
   it("constructs native sockets with the required subprotocol and arraybuffer frames", () => {
     const created: Array<{
       readonly protocol: string;

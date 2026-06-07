@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -681,7 +681,11 @@ describe("DroidWebscrApp", () => {
           createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
           listDevices: async () => [],
         }}
-        initialLogs={["Agent ready", "No device selected"]}
+        initialLogs={[
+          "10:42:10.231 INFO stream Starting stream",
+          "10:42:11.004 WARN encoder Bitrate pressure detected",
+          "Session stopped",
+        ]}
         storage={storage}
       />,
     );
@@ -697,7 +701,33 @@ describe("DroidWebscrApp", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
 
     const logDrawer = screen.getByRole("region", { name: "Log drawer" });
-    expect(within(logDrawer).getByText("Agent ready")).toBeInTheDocument();
+    expect(within(logDrawer).getByText("Starting stream")).toBeInTheDocument();
+    expect(within(logDrawer).getByText("Starting stream").closest("p")).toHaveClass(
+      "log-line-structured",
+    );
+    expect(within(logDrawer).getByText("Session stopped").closest("p")).toHaveClass(
+      "log-line-plain",
+    );
+    await user.selectOptions(
+      within(logDrawer).getByRole("combobox", { name: "Log level" }),
+      "warn",
+    );
+    expect(within(logDrawer).getByText("Bitrate pressure detected")).toBeInTheDocument();
+    expect(within(logDrawer).queryByText("Starting stream")).not.toBeInTheDocument();
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 720 });
+    const logResizer = within(logDrawer).getByRole("separator", { name: "Resize agent log" });
+    fireEvent.pointerEnter(logResizer);
+    expect(logResizer).toHaveClass("hovered");
+    fireEvent.pointerLeave(logResizer);
+    expect(logResizer).not.toHaveClass("hovered");
+    fireEvent.pointerDown(logResizer, { clientY: 584 });
+    fireEvent.pointerMove(window, { clientY: 520 });
+    await waitFor(() =>
+      expect(
+        document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+      ).toBe("200px"),
+    );
+    fireEvent.pointerUp(window);
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
 
     expect(within(logDrawer).getByText("No logs")).toBeInTheDocument();
@@ -837,7 +867,7 @@ describe("DroidWebscrApp", () => {
     await user.click(clipboard);
 
     expect(saveRuntimeClipboard).toHaveBeenCalledWith(false);
-    expect(await screen.findByText("Clipboard sync disabled")).toBeInTheDocument();
+    expect(await screen.findAllByText("Clipboard sync disabled")).not.toHaveLength(0);
     expect(clipboard).toHaveAttribute("aria-pressed", "false");
     expect(clipboard).toHaveAttribute("title", "Clipboard sync disabled");
     expect(screen.queryByText(/policy/i)).not.toBeInTheDocument();

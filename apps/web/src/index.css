@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --color-background: #0e141b;
   --color-foreground: #e7edf4;
   --color-muted: #1a2530;
@@ -18,6 +19,13 @@
   --color-screen-border: #283744;
   --color-screen-chrome: #0b1016;
   --color-screen-muted: #a7b3bf;
+}
+
+:root {
+  --control-text: #d6e0ea;
+  --primary-border: #1fb460;
+  --primary-bg: linear-gradient(180deg, #1aa85b, #087f43);
+  --primary-shadow: 0 8px 18px rgb(18 179 93 / 20%);
 }
 
 :root[data-theme="light"] {
@@ -37,6 +45,10 @@
   --color-screen-border: #c7d1df;
   --color-screen-chrome: #eef3f8;
   --color-screen-muted: #667487;
+  --control-text: #202a35;
+  --primary-border: #067b37;
+  --primary-bg: linear-gradient(180deg, #10a14a, #07883e);
+  --primary-shadow: 0 8px 18px rgb(7 136 62 / 18%);
 }
 
 * {
@@ -49,6 +61,12 @@ body {
   background: var(--color-background);
 }
 
+svg {
+  display: block;
+  height: 16px;
+  width: 16px;
+}
+
 button,
 select,
 input {
@@ -57,7 +75,7 @@ input {
 
 .app-shell {
   display: grid;
-  grid-template-rows: 48px minmax(360px, 1fr) 136px;
+  grid-template-rows: 48px minmax(360px, 1fr) var(--log-height, 136px);
   height: 100vh;
   overflow: hidden;
   position: relative;
@@ -86,6 +104,12 @@ input {
   padding: 0 10px;
 }
 
+.topbar button {
+  font-size: 12px;
+  font-weight: 640;
+  line-height: normal;
+}
+
 .brand {
   align-items: center;
   border-right: 1px solid var(--color-border);
@@ -109,12 +133,50 @@ input {
 }
 
 .topbar > button[aria-label="Start"] {
-  min-width: 78px;
+  background: var(--primary-bg);
+  border-color: var(--primary-border);
+  box-shadow: var(--primary-shadow);
+  flex: 0 0 76px;
+  min-width: 76px;
+  width: 76px;
 }
 
 .topbar .topbar-spacer ~ button {
   background: transparent;
   border-color: transparent;
+  color: #d6e0ea;
+  height: 30px;
+  min-width: 30px;
+  width: 30px;
+}
+
+.topbar .topbar-spacer ~ button + button {
+  margin-left: -2px;
+}
+
+.topbar .topbar-spacer ~ button svg {
+  height: 16px;
+  width: 16px;
+}
+
+.topbar > button[aria-label="Start"] svg {
+  height: 16px;
+  width: 16px;
+}
+
+.topbar-group button {
+  background: #111821;
+  border-color: #1d2935;
+  color: #e7edf4;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.topbar-group button svg {
+  height: 16px;
+  width: 16px;
 }
 
 .brand span,
@@ -187,7 +249,8 @@ input {
   align-items: center;
   color: var(--color-muted-foreground);
   display: flex;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 650;
   gap: 6px;
 }
 
@@ -198,6 +261,7 @@ input {
   border-radius: 6px;
   color: var(--color-foreground);
   height: 30px;
+  min-width: 74px;
   padding: 0 8px;
 }
 
@@ -213,14 +277,31 @@ input {
 }
 
 .sidebar-section {
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin: 0 -12px;
+  padding: 14px 12px 16px;
+}
+
+.sidebar-section:first-child {
+  padding-top: 4px;
 }
 
 .sidebar-section > button {
   justify-content: flex-start;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: normal;
+  min-height: 34px;
+  padding: 0 10px;
   width: 100%;
+}
+
+.sidebar-section > button svg {
+  height: 16px;
+  width: 16px;
 }
 
 .sidebar-section > button[variant],
@@ -228,6 +309,7 @@ input {
   background: #131b24;
   border-color: #1d2935;
   color: #d6e0ea;
+  gap: 12px;
 }
 
 .section-heading {
@@ -247,13 +329,13 @@ input {
 .device-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .device-card {
   border: 1px solid var(--color-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--color-background) 70%, var(--color-panel));
+  background: var(--color-panel);
   overflow: hidden;
   position: relative;
 }
@@ -265,7 +347,7 @@ input {
 .device-card-main {
   align-items: center;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 22px;
   min-height: 84px;
 }
 
@@ -276,10 +358,10 @@ input {
   color: var(--color-foreground);
   cursor: pointer;
   display: grid;
-  gap: 10px;
-  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 12px;
+  grid-template-columns: 36px minmax(0, 1fr);
   min-width: 0;
-  padding: 10px;
+  padding: 12px;
   text-align: left;
   width: 100%;
 }
@@ -289,18 +371,24 @@ input {
 }
 
 .device-card-main > button:first-child svg {
-  background: linear-gradient(145deg, #222c36, #111821);
-  border: 1px solid #2b3948;
-  border-radius: 4px;
-  color: #6f7e8d;
+  background:
+    radial-gradient(circle at 50% 8%, #262b31 0 2px, transparent 3px),
+    linear-gradient(135deg, #1e2933, #0d141a 60%, #45515d);
+  border: 3px solid #242a31;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%);
+  color: transparent;
   height: 48px;
-  padding: 8px;
+  margin-top: 2px;
+  padding: 0;
+  stroke: transparent;
   width: 30px;
 }
 
 .device-card-main > button:last-child {
   justify-self: end;
-  margin-right: 6px;
+  margin-right: 2px;
+  width: 22px;
 }
 
 .device-card strong,
@@ -311,25 +399,33 @@ input {
   white-space: nowrap;
 }
 
+.device-card strong {
+  font-size: 13px;
+  font-weight: 720;
+}
+
 .device-card small {
   color: var(--color-muted-foreground);
-  font-size: 11px;
+  font-size: 12px;
+  margin-top: 3px;
 }
 
 .device-state {
   align-items: center;
   color: var(--color-primary) !important;
   display: flex !important;
-  gap: 5px;
-  margin-top: 4px;
+  font-size: 12px !important;
+  gap: 0;
+  margin-top: 9px;
 }
 
 .status-dot {
   background: var(--color-primary);
   border-radius: 999px;
   display: inline-block;
-  height: 6px;
-  width: 6px;
+  height: 7px;
+  margin-right: 7px;
+  width: 7px;
 }
 
 .device-menu {
@@ -342,7 +438,7 @@ input {
   overflow: hidden;
   position: absolute;
   right: 10px;
-  top: 42px;
+  top: 38px;
   z-index: 8;
 }
 
@@ -350,9 +446,9 @@ input {
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--color-border);
-  color: var(--color-muted-foreground);
+  color: var(--control-text);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 12px;
   min-height: 32px;
   padding: 0 10px;
   text-align: left;
@@ -578,7 +674,7 @@ input {
   justify-content: center;
   overflow: hidden;
   padding: 4px 0;
-  width: 48px;
+  width: 46px;
   z-index: 4;
 }
 
@@ -606,8 +702,13 @@ input {
   border-radius: 0;
   background: transparent;
   color: #d6e0ea;
-  height: 36px;
+  height: 38px;
   width: 46px;
+}
+
+.control-rail button svg {
+  height: 16px;
+  width: 16px;
 }
 
 .control-rail button:last-child {
@@ -620,35 +721,38 @@ input {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding-top: 14px;
+  margin: 0 -12px;
+  padding: 14px 12px 0;
 }
 
 .access-panel span {
-  color: var(--color-muted-foreground);
+  color: var(--control-text);
   font-size: 12px;
 }
 
 .access-panel h2 {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   margin: 0;
 }
 
 .access-row {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: 8px;
-  justify-content: space-between;
+  grid-template-columns: 1fr auto 16px;
+  text-align: left;
 }
 
 .access-action {
   background: transparent;
   border: 1px solid var(--color-border);
   border-radius: 0;
-  color: var(--color-foreground);
+  color: inherit;
   cursor: pointer;
-  height: 32px;
-  padding: 0 10px;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 9px;
   width: 100%;
 }
 
@@ -663,21 +767,28 @@ input {
 .access-action strong {
   color: var(--color-primary);
   font-size: 12px;
+  justify-self: end;
 }
 
 .access-row span {
   align-items: center;
   display: flex;
-  gap: 7px;
+  gap: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.access-row svg {
+  height: 16px;
+  width: 16px;
 }
 
 .switch-pill {
   background: #4b5c6c;
   border-radius: 999px;
   height: 18px;
+  justify-self: end;
   justify-content: flex-start;
   padding: 2px;
   width: 34px;
@@ -700,7 +811,7 @@ input {
   background: #0b1117;
   border-top: 1px solid var(--color-border);
   display: grid;
-  grid-template-rows: 6px 38px minmax(0, 1fr);
+  grid-template-rows: 6px 34px minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -717,9 +828,15 @@ input {
   height: 4px;
   left: 50%;
   position: absolute;
-  top: 1px;
+  top: 3px;
   transform: translateX(-50%);
   width: 46px;
+}
+
+.drawer-resizer:hover::after,
+.drawer-resizer.hovered::after,
+.log-drawer.resizing .drawer-resizer::after {
+  background: var(--color-muted-foreground);
 }
 
 .log-toolbar {
@@ -779,18 +896,53 @@ input {
   background: transparent;
   border-color: transparent;
   color: #d6e0ea;
+  font-size: 11px;
+  font-weight: 640;
+  gap: 6px;
+}
+
+.log-toolbar button[aria-label="Clear logs"] svg {
+  height: 16px;
+  width: 16px;
 }
 
 .log-lines {
-  color: var(--color-muted-foreground);
+  color: #d6e0ea;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
+  line-height: 1.62;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 10px 14px 18px;
 }
 
 .log-lines p {
-  margin: 0 0 5px;
+  margin: 0;
+  white-space: pre;
+}
+
+.log-line-structured {
+  display: grid;
+  grid-template-columns: 92px 52px 72px minmax(0, 1fr);
+}
+
+.log-line-plain {
+  display: block;
+}
+
+.log-level.log-info {
+  color: #079a48;
+}
+
+.log-level.log-debug {
+  color: #2c6ed5;
+}
+
+.log-level.log-warn {
+  color: #bd6b00;
+}
+
+.log-level.log-error {
+  color: #ce1d17;
 }
 
 .dialog-backdrop {

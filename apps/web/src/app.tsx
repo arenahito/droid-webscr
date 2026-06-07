@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Camera,
   Check,
+  Circle,
   Clipboard,
   Home,
   Keyboard,
@@ -23,6 +24,7 @@ import {
   Video,
   Volume2,
   Wifi,
+  Trash2,
 } from "lucide-react";
 import {
   createFrameHeader,
@@ -133,6 +135,8 @@ export function DroidWebscrApp({
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
+  const [logHeight, setLogHeight] = React.useState(136);
+  const [logResizing, setLogResizing] = React.useState(false);
   const [state, dispatch] = React.useReducer(reduceSessionState, {
     ...defaultSessionState,
     logs: initialLogs,
@@ -145,6 +149,10 @@ export function DroidWebscrApp({
   const sequenceRef = React.useRef(1n);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
   const useDesignApiFallback = shouldUseDesignApiFallback(client);
+  const appStyle = React.useMemo(
+    () => ({ "--log-height": `${logHeight}px` }) as React.CSSProperties,
+    [logHeight],
+  );
 
   React.useEffect(() => {
     applyTheme(theme);
@@ -155,6 +163,32 @@ export function DroidWebscrApp({
     setToast(message);
     window.setTimeout(() => setToast(undefined), 1600);
   }, []);
+
+  const setLogHeightFromClientY = React.useCallback((clientY: number) => {
+    const nextHeight = Math.round(window.innerHeight - clientY);
+    setLogHeight(Math.max(88, Math.min(360, nextHeight)));
+  }, []);
+
+  React.useEffect(() => {
+    if (!logResizing) {
+      return undefined;
+    }
+    const onPointerMove = (event: PointerEvent) => setLogHeightFromClientY(event.clientY);
+    const onMouseMove = (event: MouseEvent) => setLogHeightFromClientY(event.clientY);
+    const stopResize = () => setLogResizing(false);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopResize);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopResize);
+    };
+  }, [logResizing, setLogHeightFromClientY]);
 
   const refreshDevices = React.useCallback(async () => {
     setLoadingDevices(true);
@@ -547,6 +581,7 @@ export function DroidWebscrApp({
         "app-shell min-h-screen bg-background text-foreground",
         sidebarCollapsed && "sidebar-collapsed",
       )}
+      style={appStyle}
     >
       <Topbar
         bitrateMbps={bitrateMbps}
@@ -645,9 +680,14 @@ export function DroidWebscrApp({
         autoscroll={autoscroll}
         level={logLevel}
         logs={state.logs}
+        resizing={logResizing}
         onAutoscrollChange={setAutoscroll}
         onClear={() => dispatch({ type: "clear-logs" })}
         onLevelChange={setLogLevel}
+        onResizeStart={(clientY) => {
+          setLogHeightFromClientY(clientY);
+          setLogResizing(true);
+        }}
       />
       {dialog ? (
         <Dialog
@@ -1164,7 +1204,7 @@ function AndroidControls({
     ["Keyboard", "keyboard", Keyboard],
     ["Home", "home", Home],
     ["Back", "back", ArrowLeft],
-    ["Overview", "overview", MonitorSmartphone],
+    ["Overview", "overview", Circle],
     ["Volume", "volume-up", Volume2],
     ["Power", "power", Power],
   ];
@@ -1192,6 +1232,8 @@ function LogDrawer({
   onAutoscrollChange,
   onClear,
   onLevelChange,
+  onResizeStart,
+  resizing,
 }: {
   readonly autoscroll: boolean;
   readonly level: LogLevel;
@@ -1199,11 +1241,32 @@ function LogDrawer({
   readonly onAutoscrollChange: (enabled: boolean) => void;
   readonly onClear: () => void;
   readonly onLevelChange: (level: LogLevel) => void;
+  readonly onResizeStart: (clientY: number) => void;
+  readonly resizing: boolean;
 }): React.ReactElement {
-  const visibleLogs = logs.filter((log) => level === "all" || log.toLowerCase().startsWith(level));
+  const [resizerHovered, setResizerHovered] = React.useState(false);
+  const visibleLogs = logs.filter((log) => isVisibleLogLine(log, level));
   return (
-    <section aria-label="Log drawer" className="log-drawer">
-      <div className="drawer-resizer" />
+    <section aria-label="Log drawer" className={cn("log-drawer", resizing && "resizing")}>
+      <div
+        aria-label="Resize agent log"
+        aria-orientation="horizontal"
+        className={cn("drawer-resizer", resizerHovered && "hovered")}
+        onMouseEnter={() => setResizerHovered(true)}
+        onMouseLeave={() => setResizerHovered(false)}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          onResizeStart(event.clientY);
+        }}
+        onPointerEnter={() => setResizerHovered(true)}
+        onPointerLeave={() => setResizerHovered(false)}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+          onResizeStart(event.clientY);
+        }}
+        role="separator"
+      />
       <div className="log-toolbar">
         <h2>AGENT LOG</h2>
         <label>
@@ -1228,6 +1291,7 @@ function LogDrawer({
           Autoscroll
         </label>
         <Button aria-label="Clear logs" onClick={onClear} size="sm" variant="outline">
+          <Trash2 aria-hidden="true" data-icon="inline-start" />
           Clear
         </Button>
       </div>
@@ -1235,10 +1299,25 @@ function LogDrawer({
         {visibleLogs.length === 0 ? (
           <p>No logs</p>
         ) : (
-          visibleLogs.map((log, index) => <p key={`${log}-${index}`}>{log}</p>)
+          visibleLogs.map((log, index) => <LogLine key={`${log}-${index}`} value={log} />)
         )}
       </div>
     </section>
+  );
+}
+
+function LogLine({ value }: { readonly value: string }): React.ReactElement {
+  const parsed = parseLogLine(value);
+  if (!parsed) {
+    return <p className="log-line-plain">{value}</p>;
+  }
+  return (
+    <p className="log-line-structured">
+      <span>{parsed.time}</span>
+      <span className={cn("log-level", `log-${parsed.level.toLowerCase()}`)}>{parsed.level}</span>
+      <span>{parsed.area}</span>
+      <span>{parsed.message}</span>
+    </p>
   );
 }
 
@@ -1563,6 +1642,48 @@ function extractInsertedText(event: Event): string | undefined {
     return undefined;
   }
   return inputEvent.data && inputEvent.data.length > 0 ? inputEvent.data : undefined;
+}
+
+function parseLogLine(value: string):
+  | {
+      readonly area: string;
+      readonly level: "DEBUG" | "ERROR" | "INFO" | "WARN";
+      readonly message: string;
+      readonly time: string;
+    }
+  | undefined {
+  const match =
+    /^(?<time>\d{2}:\d{2}:\d{2}(?:\.\d{3})?)\s+(?<level>DEBUG|ERROR|INFO|WARN)\s+(?<rest>.*)$/.exec(
+      value,
+    );
+  const groups = match?.groups;
+  if (!groups) {
+    return undefined;
+  }
+  const { level, rest: rawRest, time } = groups;
+  if (
+    !time ||
+    !rawRest ||
+    (level !== "DEBUG" && level !== "ERROR" && level !== "INFO" && level !== "WARN")
+  ) {
+    return undefined;
+  }
+  const rest = rawRest.trimStart();
+  const [area = "", ...messageParts] = rest.split(/\s+/);
+  return {
+    area,
+    level,
+    message: messageParts.join(" "),
+    time,
+  };
+}
+
+function isVisibleLogLine(value: string, level: LogLevel): boolean {
+  if (level === "all") {
+    return true;
+  }
+  const parsed = parseLogLine(value);
+  return parsed ? parsed.level.toLowerCase() === level : value.toLowerCase().startsWith(level);
 }
 
 function describeVideoStatus(snapshot: VideoPipelineSnapshot | undefined): {

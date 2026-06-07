@@ -1160,12 +1160,17 @@ function Topbar({
         {session ? `Session ${session.sessionId}` : "No session"}
       </span>
       {session ? (
-        <Button onClick={onStop} variant="outline">
+        <Button className="session-toggle session-running" onClick={onStop} variant="outline">
           <Square aria-hidden="true" data-icon="inline-start" />
           Stop
         </Button>
       ) : (
-        <Button aria-label="Start" disabled={!canStart} onClick={onStart}>
+        <Button
+          aria-label="Start"
+          className="session-toggle"
+          disabled={!canStart}
+          onClick={onStart}
+        >
           <Play aria-hidden="true" data-icon="inline-start" />
           Start
         </Button>
@@ -1189,7 +1194,6 @@ function Topbar({
         </Button>
       </div>
       <label className="select-label">
-        Bitrate
         <select
           aria-label="Bitrate"
           onChange={(event) => onReconfigure(Number(event.target.value), fps)}
@@ -1202,7 +1206,6 @@ function Topbar({
         </select>
       </label>
       <label className="select-label">
-        FPS
         <select
           aria-label="FPS"
           disabled={phase !== "idle"}

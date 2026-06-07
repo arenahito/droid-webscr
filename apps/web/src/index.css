@@ -26,6 +26,8 @@
   --primary-border: #1fb460;
   --primary-bg: linear-gradient(180deg, #1aa85b, #087f43);
   --primary-shadow: 0 8px 18px rgb(18 179 93 / 20%);
+  --stop-border: rgb(239 68 68 / 46%);
+  --stop-text: #f87171;
 }
 
 :root[data-theme="light"] {
@@ -49,6 +51,8 @@
   --primary-border: #067b37;
   --primary-bg: linear-gradient(180deg, #10a14a, #07883e);
   --primary-shadow: 0 8px 18px rgb(7 136 62 / 18%);
+  --stop-border: rgb(220 38 38 / 38%);
+  --stop-text: #dc2626;
 }
 
 * {
@@ -132,13 +136,21 @@ input {
   margin: 0;
 }
 
-.topbar > button[aria-label="Start"] {
+.topbar > .session-toggle {
   background: var(--primary-bg);
   border-color: var(--primary-border);
   box-shadow: var(--primary-shadow);
   flex: 0 0 76px;
+  max-width: 76px;
   min-width: 76px;
   width: 76px;
+}
+
+.topbar > .session-toggle.session-running {
+  background: var(--color-panel);
+  border-color: var(--stop-border);
+  box-shadow: none;
+  color: var(--stop-text);
 }
 
 .topbar .topbar-spacer ~ button {
@@ -159,7 +171,7 @@ input {
   width: 16px;
 }
 
-.topbar > button[aria-label="Start"] svg {
+.topbar > .session-toggle svg {
   height: 16px;
   width: 16px;
 }
@@ -262,6 +274,15 @@ input {
   height: 30px;
   min-width: 74px;
   padding: 0 8px;
+}
+
+.select-label select:disabled,
+.log-toolbar select:disabled {
+  background: var(--color-muted);
+  border-color: rgb(145 160 175 / 24%);
+  color: var(--color-muted-foreground);
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .sidebar {

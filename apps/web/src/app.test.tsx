@@ -213,12 +213,17 @@ describe("DroidWebscrApp", () => {
 
     expect(createSession).toHaveBeenCalledWith("emulator-5554", { bitrateMbps: 8, fps: 60 });
     expect(await screen.findByText("Session s-emulator")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    const stopButton = screen.getByRole("button", { name: "Stop" });
+    expect(stopButton).toBeEnabled();
+    expect(stopButton).toHaveClass("session-toggle", "session-running");
     expect(screen.getByRole("combobox", { name: "FPS" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await user.click(stopButton);
 
-    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
+    const startButton = screen.getByRole("button", { name: "Start" });
+    expect(startButton).toBeEnabled();
+    expect(startButton).toHaveClass("session-toggle");
+    expect(startButton).not.toHaveClass("session-running");
     expect(screen.getByRole("combobox", { name: "FPS" })).toBeEnabled();
     expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();

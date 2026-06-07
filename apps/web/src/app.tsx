@@ -3,10 +3,8 @@ import {
   ArrowLeft,
   Camera,
   Check,
-  Circle,
   Clipboard,
   Home,
-  Keyboard,
   List,
   Menu,
   MonitorSmartphone,
@@ -21,6 +19,7 @@ import {
   Square,
   Sun,
   Video,
+  Volume1,
   Volume2,
   Wifi,
   Trash2,
@@ -944,7 +943,6 @@ export function DroidWebscrApp({
         onCapture={captureFrame}
         onReconfigure={sendVideoReconfigure}
         onRecord={toggleRecording}
-        onRotate={(delta) => setRotation((current) => (current + delta + 360) % 360)}
         onSessionActions={() => setDialog("session-actions")}
         onStart={() => void startSession()}
         onStop={stopSession}
@@ -1028,7 +1026,10 @@ export function DroidWebscrApp({
               viewportSize={viewportSize}
               videoSnapshot={videoSnapshot}
             />
-            <AndroidControls onSystemAction={requestSystemAction} />
+            <AndroidControls
+              onRotate={(delta) => setRotation((current) => (current + delta + 360) % 360)}
+              onSystemAction={requestSystemAction}
+            />
           </div>
         </section>
       </div>
@@ -1104,7 +1105,6 @@ function Topbar({
   onCapture,
   onReconfigure,
   onRecord,
-  onRotate,
   onSessionActions,
   onStart,
   onStop,
@@ -1122,7 +1122,6 @@ function Topbar({
   readonly onCapture: () => void;
   readonly onReconfigure: (bitrateMbps: number, fps: number) => void;
   readonly onRecord: () => void;
-  readonly onRotate: (delta: number) => void;
   readonly onSessionActions: () => void;
   readonly onStart: () => void;
   readonly onStop: () => void;
@@ -1175,24 +1174,6 @@ function Topbar({
           Start
         </Button>
       )}
-      <div className="topbar-group">
-        <Button
-          aria-label="Rotate left"
-          onClick={() => onRotate(-90)}
-          size="icon"
-          variant="outline"
-        >
-          <RotateCcw aria-hidden="true" />
-        </Button>
-        <Button
-          aria-label="Rotate right"
-          onClick={() => onRotate(90)}
-          size="icon"
-          variant="outline"
-        >
-          <RotateCw aria-hidden="true" />
-        </Button>
-      </div>
       <label className="select-label">
         <select
           aria-label="Bitrate"
@@ -1773,23 +1754,44 @@ function DisconnectedPhonePlaceholder({
 }
 
 function AndroidControls({
+  onRotate,
   onSystemAction,
 }: {
+  readonly onRotate: (delta: number) => void;
   readonly onSystemAction: (action: SystemControlAction) => void;
 }): React.ReactElement {
-  const controls: ReadonlyArray<readonly [string, SystemControlAction, typeof Keyboard]> = [
-    ["Keyboard", "keyboard", Keyboard],
-    ["Home", "home", Home],
+  const controls: ReadonlyArray<readonly [string, SystemControlAction, typeof Power, boolean?]> = [
+    ["Power", "power", Power, true],
+    ["Volume up", "volume-up", Volume2],
+    ["Volume down", "volume-down", Volume1],
     ["Back", "back", ArrowLeft],
-    ["Overview", "overview", Circle],
-    ["Volume", "volume-up", Volume2],
-    ["Power", "power", Power],
+    ["Home", "home", Home],
+    ["Task list", "overview", Square],
   ];
   return (
-    <nav className="control-rail">
-      {controls.map(([label, action, Icon]) => (
+    <nav aria-label="Android hardware controls" className="control-rail">
+      {controls.slice(0, 3).map(([label, action, Icon, danger]) => (
         <Button
           aria-label={label}
+          className={danger ? "danger" : undefined}
+          key={label}
+          onClick={() => onSystemAction(action)}
+          size="icon"
+          variant="outline"
+        >
+          <Icon aria-hidden="true" />
+        </Button>
+      ))}
+      <Button aria-label="Rotate left" onClick={() => onRotate(-90)} size="icon" variant="outline">
+        <RotateCcw aria-hidden="true" />
+      </Button>
+      <Button aria-label="Rotate right" onClick={() => onRotate(90)} size="icon" variant="outline">
+        <RotateCw aria-hidden="true" />
+      </Button>
+      {controls.slice(3).map(([label, action, Icon, danger]) => (
+        <Button
+          aria-label={label}
+          className={danger ? "danger" : undefined}
           key={label}
           onClick={() => onSystemAction(action)}
           size="icon"

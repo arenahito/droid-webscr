@@ -663,6 +663,9 @@ input {
 
 .control-rail button:last-child {
   border-bottom: 0;
+}
+
+.control-rail button.danger {
   color: #ff6b63;
 }
 

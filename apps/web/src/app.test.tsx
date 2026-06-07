@@ -59,9 +59,25 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
     expect(screen.getByLabelText("Android screen viewport")).toBeInTheDocument();
+    const railButtons = screen
+      .getByRole("navigation", { name: "Android hardware controls" })
+      .querySelectorAll("button");
+    expect([...railButtons].map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Power",
+      "Volume up",
+      "Volume down",
+      "Rotate left",
+      "Rotate right",
+      "Back",
+      "Home",
+      "Task list",
+    ]);
+    expect(screen.getByRole("button", { name: "Power" })).toHaveClass("danger");
+    expect(screen.getByRole("button", { name: "Rotate right" })).not.toHaveClass("danger");
+    expect(screen.queryByRole("button", { name: "Keyboard" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Task list" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toBeEnabled();
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
@@ -307,6 +323,54 @@ describe("DroidWebscrApp", () => {
     expect(socket.closed).toBe(true);
     expect(pipeline.closed).toBe(true);
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
+  });
+
+  it("sends volume down and task list system controls from the side rail", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: false,
+            decodedFrames: 0,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "idle",
+            videoSize: undefined,
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await user.click(screen.getByRole("button", { name: "Volume down" }));
+    await user.click(screen.getByRole("button", { name: "Task list" }));
+
+    const volumeDown = decodeFrame(socket.sent[1]!);
+    const taskList = decodeFrame(socket.sent[2]!);
+    expect(volumeDown.ok && [...volumeDown.value.payload]).toEqual([4]);
+    expect(taskList.ok && [...taskList.value.payload]).toEqual([2]);
   });
 
   it("returns to the disconnected placeholder when the session socket closes remotely", async () => {

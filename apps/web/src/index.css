@@ -215,8 +215,12 @@ input {
   align-items: center;
   display: flex;
   gap: 20px;
+  height: 100%;
   justify-content: center;
+  max-width: 100%;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 
 .stage-pair.is-landscape {
@@ -473,23 +477,27 @@ input {
 .stage {
   align-items: center;
   display: flex;
+  flex: 0 1 auto;
   justify-content: center;
+  max-height: 100%;
+  max-width: 100%;
   min-height: 0;
-  padding: 18px 0;
+  min-width: 0;
+  padding: 0;
 }
 
 .phone-shell {
   background: #0b1016;
   border: 1px solid var(--color-screen-border);
-  border-radius: 34px;
+  border-radius: 28px;
   box-shadow:
     0 22px 60px rgb(0 0 0 / 40%),
     inset 0 0 0 2px rgb(255 255 255 / 3%);
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr);
-  aspect-ratio: 0.462;
+  aspect-ratio: var(--phone-screen-aspect, 9 / 20);
   height: auto;
-  max-height: calc(100vh - 212px);
+  max-height: 100%;
+  max-width: 100%;
   overflow: hidden;
   padding: 10px;
   position: relative;
@@ -498,9 +506,7 @@ input {
 }
 
 .phone-shell.is-landscape {
-  aspect-ratio: 2.164;
   border-radius: 28px;
-  max-height: min(45vh, 340px);
   width: min(58vw, 736px);
 }
 
@@ -508,40 +514,15 @@ input {
   transform: rotate(180deg);
 }
 
-.phone-shell::before {
-  background: #05080b;
-  border-radius: 999px;
-  content: "";
-  height: 14px;
-  left: 50%;
-  position: absolute;
-  top: 22px;
-  transform: translateX(-50%);
-  width: 14px;
-  z-index: 3;
-}
-
-.phone-statusbar {
-  align-items: center;
-  color: #eef4fa;
-  display: flex;
-  font-size: 11px;
-  font-weight: 650;
-  justify-content: space-between;
-  padding: 10px 16px 0;
-}
-
-.phone-statusbar span:nth-child(3) {
-  display: none;
-}
-
 .phone-screen {
   background: linear-gradient(160deg, #162235, #111827 45%, #10151d);
-  border-radius: 24px;
+  border-radius: 20px;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
   position: relative;
   transition: transform 180ms ease;
+  width: 100%;
 }
 
 .video-canvas,
@@ -681,6 +662,7 @@ input {
 .stage-pair.is-landscape .control-rail {
   flex-direction: row;
   height: 38px;
+  max-width: 100%;
   padding: 0 4px;
   width: auto;
 }
@@ -688,7 +670,9 @@ input {
 .stage-pair.is-landscape .control-rail button {
   border-bottom: 0;
   border-right: 1px solid var(--color-border);
+  flex: 1 1 38px;
   height: 38px;
+  min-width: 0;
   width: 38px;
 }
 

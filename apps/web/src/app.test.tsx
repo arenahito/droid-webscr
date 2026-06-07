@@ -8,12 +8,41 @@ import {
   MessageType,
   StreamId,
 } from "@droid-webscr/protocol";
-import { DroidWebscrApp } from "./app.js";
+import { createPhoneStyle, DroidWebscrApp } from "./app.js";
 import { createMemoryStorage } from "./lib/memory-storage.js";
 import { VideoPipeline, VideoPipelineSnapshot } from "./decoder/video-pipeline.js";
 import { FakeBinaryWebSocket, SessionSocket } from "./transport/session-socket.js";
 
 describe("DroidWebscrApp", () => {
+  it("sizes the phone against viewport padding and control rail placement", () => {
+    expect(
+      createPhoneStyle({ height: 1280, width: 720 }, { height: 360, width: 500 }, false),
+    ).toMatchObject({
+      "--phone-screen-aspect": "720 / 1280",
+      height: "324px",
+      width: "191px",
+    });
+    expect(
+      createPhoneStyle({ height: 1280, width: 720 }, { height: 360, width: 500 }, true),
+    ).toMatchObject({
+      "--phone-screen-aspect": "720 / 1280",
+      height: "266px",
+      width: "158px",
+    });
+    expect(
+      createPhoneStyle({ height: 1280, width: 720 }, { height: 200, width: 180 }, false),
+    ).toMatchObject({
+      height: "123px",
+      width: "78px",
+    });
+    expect(
+      createPhoneStyle({ height: 1280, width: 720 }, { height: 200, width: 180 }, true),
+    ).toMatchObject({
+      height: "106px",
+      width: "68px",
+    });
+  });
+
   it("renders empty device state and required operational regions", async () => {
     render(
       <DroidWebscrApp
@@ -35,6 +64,12 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toBeEnabled();
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
+    expect(screen.queryByText("Wi-Fi 100%")).not.toBeInTheDocument();
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("9 / 20");
   });
 
   it("shows scanning state and refresh errors from the agent", async () => {
@@ -223,6 +258,17 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByText("Video ready")).toBeInTheDocument();
     expect(pipeline.accepted).toHaveLength(1);
     expect(decodedType(socket.sent[0]!)).toBe(MessageType.SessionHello);
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("720 / 1280");
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("720 / 1280");
 
     await user.click(screen.getByRole("button", { name: "Home" }));
     const home = decodeFrame(socket.sent[1]!);

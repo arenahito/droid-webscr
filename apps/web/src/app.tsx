@@ -96,6 +96,13 @@ const fallbackRuntimeConfig: RuntimeConfig = {
   port: 7391,
 };
 
+const defaultPhoneScreenSize = { height: 20, width: 9 } as const;
+const phoneFrameInsetPx = 20;
+const phoneViewportPaddingPx = 36;
+const phoneControlGapPx = 20;
+const phoneControlRailHeightPx = 38;
+const phoneControlRailWidthPx = 46;
+
 const designInitialLogs: readonly string[] = [
   "10:42:10.231 INFO   stream     Starting stream: 1344x2992@30fps bitrate=4Mbps transport=USB",
   "10:42:10.448 INFO   control    Input channel established",
@@ -149,6 +156,7 @@ export function DroidWebscrApp({
   const sequenceRef = React.useRef(1n);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
   const useDesignApiFallback = shouldUseDesignApiFallback(client);
+  const [viewportRef, viewportSize] = useElementSize<HTMLElement>();
   const appStyle = React.useMemo(
     () => ({ "--log-height": `${logHeight}px` }) as React.CSSProperties,
     [logHeight],
@@ -651,7 +659,7 @@ export function DroidWebscrApp({
             }
           />
         )}
-        <section className="viewport-grid bg-viewport">
+        <section className="viewport-grid bg-viewport" ref={viewportRef}>
           <div className={cn("stage-pair", isLandscapeRotation(rotation) && "is-landscape")}>
             <AndroidViewport
               canvasRef={canvasRef}
@@ -670,6 +678,7 @@ export function DroidWebscrApp({
               onPointerUp={(event) => sendPointer(event, "up")}
               rotation={rotation}
               textInputRef={textInputRef}
+              viewportSize={viewportSize}
               videoSnapshot={videoSnapshot}
             />
             <AndroidControls onSystemAction={requestSystemAction} />
@@ -1087,6 +1096,7 @@ function AndroidViewport({
   onPointerUp,
   rotation,
   textInputRef,
+  viewportSize,
   videoSnapshot,
 }: {
   readonly canvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -1101,10 +1111,13 @@ function AndroidViewport({
   readonly onPointerUp: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly rotation: number;
   readonly textInputRef: React.RefObject<HTMLTextAreaElement | null>;
+  readonly viewportSize: { readonly height: number; readonly width: number } | undefined;
   readonly videoSnapshot: VideoPipelineSnapshot | undefined;
 }): React.ReactElement {
   const status = describeVideoStatus(videoSnapshot);
   const landscape = isLandscapeRotation(rotation);
+  const displaySize = getDisplayScreenSize(videoSnapshot, rotation);
+  const phoneStyle = createPhoneStyle(displaySize, viewportSize, landscape);
   return (
     <section aria-label="Android screen viewport" className="stage">
       <div
@@ -1113,13 +1126,10 @@ function AndroidViewport({
           landscape && "is-landscape",
           rotation === 180 && "rotation-180",
         )}
+        style={phoneStyle}
       >
-        <div className="phone-statusbar">
-          <span>10:42</span>
-          <span title={device?.serial ?? "waiting"}>Wi-Fi 100%</span>
-          <span>100%</span>
-        </div>
         {videoSnapshot?.lastError ? <small className="compat-text">{status.detail}</small> : null}
+        {device ? <span className="compat-text">{device.serial}</span> : null}
         <span className="compat-text">{status.title}</span>
         <div className="phone-screen">
           <canvas
@@ -1158,6 +1168,81 @@ function AndroidViewport({
       </div>
     </section>
   );
+}
+
+function useElementSize<TElement extends HTMLElement>(): [
+  React.RefObject<TElement | null>,
+  { readonly height: number; readonly width: number } | undefined,
+] {
+  const ref = React.useRef<TElement | null>(null);
+  const [size, setSize] = React.useState<{ readonly height: number; readonly width: number }>();
+
+  React.useEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return undefined;
+    }
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      setSize({ height: rect.height, width: rect.width });
+    };
+    updateSize();
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(updateSize);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+    window.addEventListener("resize", updateSize);
+    return () => window.removeEventListener("resize", updateSize);
+  }, []);
+
+  return [ref, size];
+}
+
+function getDisplayScreenSize(
+  snapshot: VideoPipelineSnapshot | undefined,
+  rotation: number,
+): { readonly height: number; readonly width: number } {
+  if (snapshot?.configured && snapshot.videoSize) {
+    return snapshot.videoSize;
+  }
+  const size = defaultPhoneScreenSize;
+  if (!isLandscapeRotation(rotation)) {
+    return size;
+  }
+  return { height: size.width, width: size.height };
+}
+
+export function createPhoneStyle(
+  screenSize: { readonly height: number; readonly width: number },
+  viewportSize: { readonly height: number; readonly width: number } | undefined,
+  controlsBelow: boolean,
+): React.CSSProperties {
+  const aspect = screenSize.width / screenSize.height;
+  const style = {
+    "--phone-screen-aspect": `${screenSize.width} / ${screenSize.height}`,
+  } as React.CSSProperties;
+  if (!viewportSize || viewportSize.height <= 0 || viewportSize.width <= 0) {
+    return style;
+  }
+  const reservedControlWidth = controlsBelow ? 0 : phoneControlRailWidthPx + phoneControlGapPx;
+  const reservedControlHeight = controlsBelow ? phoneControlRailHeightPx + phoneControlGapPx : 0;
+  const maxScreenWidth = Math.max(
+    1,
+    viewportSize.width - reservedControlWidth - phoneViewportPaddingPx - phoneFrameInsetPx,
+  );
+  const maxScreenHeight = Math.max(
+    1,
+    viewportSize.height - reservedControlHeight - phoneViewportPaddingPx - phoneFrameInsetPx,
+  );
+  const screenWidth =
+    maxScreenWidth / maxScreenHeight > aspect ? maxScreenHeight * aspect : maxScreenWidth;
+  const screenHeight = screenWidth / aspect;
+  return {
+    ...style,
+    height: `${Math.round(screenHeight + phoneFrameInsetPx)}px`,
+    width: `${Math.round(screenWidth + phoneFrameInsetPx)}px`,
+  };
 }
 
 function MockAndroidHome({

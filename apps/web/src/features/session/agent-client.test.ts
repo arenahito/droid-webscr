@@ -21,14 +21,22 @@ describe("HTTP agent client", () => {
     await expect(client.listDevices()).resolves.toEqual([
       { authorizationState: "authorized", serial: "emulator-5554" },
     ]);
-    await expect(client.createSession("emulator-5554")).resolves.toEqual({
+    await expect(
+      client.createSession("emulator-5554", { bitrateMbps: 4, fps: 30 }),
+    ).resolves.toEqual({
       serial: "emulator-5554",
       sessionId: "s1",
       token: "t1",
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:7391/api/sessions",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        body: JSON.stringify({
+          serial: "emulator-5554",
+          video: { bitrateMbps: 4, fps: 30 },
+        }),
+        method: "POST",
+      }),
     );
   });
 
@@ -142,7 +150,7 @@ describe("HTTP agent client", () => {
     });
 
     await client.listDevices();
-    await client.createSession("emulator-5554");
+    await client.createSession("emulator-5554", { bitrateMbps: 4, fps: 30 });
 
     expect(fetchMock).toHaveBeenCalledWith("http://192.168.1.20:7391/api/devices", {
       headers: { authorization: "Bearer secret" },
@@ -178,9 +186,9 @@ describe("HTTP agent client", () => {
     const client = createHttpAgentClient();
 
     await expect(client.listDevices()).rejects.toThrow("Device listing failed with HTTP 503");
-    await expect(client.createSession("emulator-5554")).rejects.toThrow(
-      "Session creation failed with HTTP 503",
-    );
+    await expect(
+      client.createSession("emulator-5554", { bitrateMbps: 4, fps: 30 }),
+    ).rejects.toThrow("Session creation failed with HTTP 503");
   });
 
   it("rejects non-json device responses from a frontend dev server", async () => {

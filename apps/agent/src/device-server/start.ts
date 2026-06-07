@@ -2,9 +2,10 @@ import { AdbProvider } from "@droid-webscr/adb";
 import { defaultDeviceServerArtifact, DeviceServerArtifact } from "./artifact.js";
 import { deployDeviceServer } from "./deploy.js";
 import { StartedDeviceSession } from "../session/device-session.js";
+import { SessionVideoSettings } from "../session/session-manager.js";
 
 export interface DeviceServer {
-  start(serial: string): Promise<StartedDeviceSession>;
+  start(serial: string, video: SessionVideoSettings): Promise<StartedDeviceSession>;
 }
 
 export class AdbDeviceServer implements DeviceServer {
@@ -13,7 +14,7 @@ export class AdbDeviceServer implements DeviceServer {
     private readonly artifact: DeviceServerArtifact = defaultDeviceServerArtifact,
   ) {}
 
-  public async start(serial: string): Promise<StartedDeviceSession> {
+  public async start(serial: string, video: SessionVideoSettings): Promise<StartedDeviceSession> {
     const session = await this.adbProvider.connect(serial);
     await deployDeviceServer(session, this.artifact);
     await session
@@ -24,6 +25,10 @@ export class AdbDeviceServer implements DeviceServer {
         "dev.droidwebscr.server.MainKt",
         "--verify-once",
         "droid-webscr",
+        "--bitrate-mbps",
+        String(video.bitrateMbps),
+        "--max-fps",
+        String(video.fps),
       ])
       .then((process) => waitForDeviceServerReady(process.stdout, "droid-webscr"));
     const socket = await session.openSocket("localabstract:droid-webscr");
@@ -31,8 +36,7 @@ export class AdbDeviceServer implements DeviceServer {
       frames: socket.chunks,
       serial,
       stop: async () => {
-        await socket.close();
-        await session.close();
+        await Promise.allSettled([socket.close(), session.close()]);
       },
       write: async (frame) => {
         await socket.write(frame);

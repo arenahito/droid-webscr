@@ -183,14 +183,15 @@ describe("DroidWebscrApp", () => {
 
   it("starts and stops a selected device session", async () => {
     const user = userEvent.setup();
+    const createSession = vi.fn(async () => ({
+      sessionId: "s-emulator",
+      serial: "emulator-5554",
+      token: "token-emulator",
+    }));
     render(
       <DroidWebscrApp
         client={{
-          createSession: async () => ({
-            sessionId: "s-emulator",
-            serial: "emulator-5554",
-            token: "token-emulator",
-          }),
+          createSession,
           listDevices: async () => [
             {
               authorizationState: "authorized",
@@ -206,14 +207,19 @@ describe("DroidWebscrApp", () => {
 
     const device = await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
     await user.click(device);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Bitrate" }), "8");
+    await user.selectOptions(screen.getByRole("combobox", { name: "FPS" }), "60");
     await user.click(screen.getByRole("button", { name: "Start" }));
 
+    expect(createSession).toHaveBeenCalledWith("emulator-5554", { bitrateMbps: 8, fps: 60 });
     expect(await screen.findByText("Session s-emulator")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "FPS" })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
 
     expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "FPS" })).toBeEnabled();
     expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
   });

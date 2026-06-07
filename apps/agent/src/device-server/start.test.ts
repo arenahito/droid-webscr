@@ -15,7 +15,7 @@ describe("ADB device server boundary", () => {
     ]);
     const server = new AdbDeviceServer(provider);
 
-    const session = await server.start("emulator-5554");
+    const session = await server.start("emulator-5554", { bitrateMbps: 4, fps: 30 });
     const adbSession = await provider.connect("emulator-5554");
 
     expect(session.serial).toBe("emulator-5554");
@@ -33,12 +33,40 @@ describe("ADB device server boundary", () => {
         "dev.droidwebscr.server.MainKt",
         "--verify-once",
         "droid-webscr",
+        "--bitrate-mbps",
+        "4",
+        "--max-fps",
+        "30",
       ],
     ]);
     await session.write(new Uint8Array([1]));
     expect(adbSession.sockets[0]?.writes).toEqual([new Uint8Array([1])]);
     await session.stop();
     expect(adbSession.sockets[0]?.closed).toBe(true);
+    expect(adbSession.closed).toBe(true);
+  });
+
+  it("keeps session cleanup idempotent when the forwarded socket is already gone", async () => {
+    const provider = new FakeAdbProvider([
+      {
+        authorizationState: AdbAuthorizationState.Authorized,
+        serial: "emulator-5554",
+        transportKind: AdbTransportKind.Emulator,
+      },
+    ]);
+    const server = new AdbDeviceServer(provider);
+    const session = await server.start("emulator-5554", { bitrateMbps: 4, fps: 30 });
+    const adbSession = await provider.connect("emulator-5554");
+    const socket = adbSession.sockets[0];
+    if (!socket) {
+      throw new Error("Expected a forwarded socket.");
+    }
+    socket.close = async () => {
+      throw new Error("adb.exe: error: listener 'tcp:57966' not found");
+    };
+
+    await expect(session.stop()).resolves.toBeUndefined();
+
     expect(adbSession.closed).toBe(true);
   });
 

@@ -319,7 +319,7 @@ export function DroidWebscrApp({
       dispatch({ serial, type: "select-device" });
       dispatch({ type: "start-requested" });
       try {
-        const session = await agentClient.createSession(serial);
+        const session = await agentClient.createSession(serial, { bitrateMbps, fps });
         dispatch({ session, type: "start-succeeded" });
         const socket = sessionSocketFactory(session);
         sessionSocketRef.current = socket;
@@ -368,6 +368,8 @@ export function DroidWebscrApp({
     [
       agentClient,
       finishSession,
+      bitrateMbps,
+      fps,
       sessionSocketFactory,
       state.phase,
       state.session,
@@ -1193,6 +1195,7 @@ function Topbar({
           onChange={(event) => onReconfigure(Number(event.target.value), fps)}
           value={bitrateMbps}
         >
+          <option value={2}>2 Mbps</option>
           <option value={4}>4 Mbps</option>
           <option value={8}>8 Mbps</option>
           <option value={12}>12 Mbps</option>
@@ -1202,11 +1205,12 @@ function Topbar({
         FPS
         <select
           aria-label="FPS"
+          disabled={phase !== "idle"}
           onChange={(event) => onReconfigure(bitrateMbps, Number(event.target.value))}
           value={fps}
         >
+          <option value={15}>15 fps</option>
           <option value={30}>30 fps</option>
-          <option value={45}>45 fps</option>
           <option value={60}>60 fps</option>
         </select>
       </label>

@@ -5,6 +5,12 @@ export interface SessionTokenRecord {
   readonly expiresAtMs: number;
   readonly sessionId: string;
   readonly token: string;
+  readonly video: SessionVideoSettings;
+}
+
+export interface SessionVideoSettings {
+  readonly bitrateMbps: number;
+  readonly fps: number;
 }
 
 export function createSessionToken(
@@ -12,12 +18,14 @@ export function createSessionToken(
   deviceSerial: string,
   nowMs: number,
   ttlMs: number,
+  video: SessionVideoSettings,
 ): SessionTokenRecord {
   return {
     deviceSerial,
     expiresAtMs: nowMs + ttlMs,
     sessionId,
     token: randomBytes(32).toString("base64url"),
+    video,
   };
 }
 

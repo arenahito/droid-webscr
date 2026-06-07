@@ -3,7 +3,7 @@ import { SessionRecord } from "./session-state.js";
 
 export interface AgentClient {
   connectEndpoint?(endpoint: string): Promise<DeviceActionResult>;
-  createSession(serial: string): Promise<SessionRecord>;
+  createSession(serial: string, video: SessionVideoSettings): Promise<SessionRecord>;
   disconnectDevice?(serial: string): Promise<DeviceActionResult>;
   getRuntimeConfig?(): Promise<RuntimeConfig>;
   listDevices(): Promise<readonly DeviceDescriptor[]>;
@@ -23,6 +23,11 @@ export interface RuntimeConfig {
   readonly bindHost: string;
   readonly clipboardEnabled: boolean;
   readonly port: number;
+}
+
+export interface SessionVideoSettings {
+  readonly bitrateMbps: number;
+  readonly fps: number;
 }
 
 export interface RuntimeBindResult extends DeviceActionResult, RuntimeConfig {
@@ -45,9 +50,9 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
   const authToken = typeof options === "string" ? undefined : options.authToken;
   const headers = createAgentHeaders(authToken);
   return {
-    createSession: async (serial) => {
+    createSession: async (serial, video) => {
       const response = await fetch(`${baseUrl}/api/sessions`, {
-        body: JSON.stringify({ serial }),
+        body: JSON.stringify({ serial, video }),
         headers: { ...headers, "content-type": "application/json" },
         method: "POST",
       });

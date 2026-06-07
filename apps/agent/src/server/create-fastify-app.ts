@@ -112,7 +112,7 @@ export async function createFastifyApp(context: AgentAppContext) {
         closed = true;
         release();
         const activeSession = deviceSession ?? (await deviceSessionPromise?.catch(() => undefined));
-        await activeSession?.stop();
+        await activeSession?.stop().catch(() => undefined);
       };
       const bufferBrowserFrame = (data: Buffer | ArrayBuffer | Buffer[]) => {
         if (typeof data === "string") {
@@ -139,7 +139,7 @@ export async function createFastifyApp(context: AgentAppContext) {
         void close();
       });
 
-      deviceSessionPromise = deviceServer.start(record.deviceSerial);
+      deviceSessionPromise = deviceServer.start(record.deviceSerial, record.video);
       void deviceSessionPromise
         .then(async (startedSession) => {
           if (closed) {

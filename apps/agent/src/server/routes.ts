@@ -149,13 +149,39 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
-    const payload = request.body as { serial?: string } | undefined;
+    const payload = request.body as
+      | {
+          readonly serial?: string;
+          readonly video?: { readonly bitrateMbps?: number; readonly fps?: number };
+        }
+      | undefined;
     if (!payload?.serial) {
       return reply.code(400).send({ error: "serial is required" });
     }
-    const session = await context.sessionManager.create(payload.serial);
+    const video = parseSessionVideoSettings(payload.video);
+    if (!video) {
+      return reply.code(400).send({ error: "supported video settings are required" });
+    }
+    const session = await context.sessionManager.create(payload.serial, video);
     return reply.code(201).send(session);
   });
+}
+
+function parseSessionVideoSettings(
+  video: { readonly bitrateMbps?: number; readonly fps?: number } | undefined,
+): { readonly bitrateMbps: number; readonly fps: number } | undefined {
+  if (!video) {
+    return { bitrateMbps: 4, fps: 30 };
+  }
+  const bitrateMbps = video?.bitrateMbps;
+  const fps = video?.fps;
+  if (
+    (bitrateMbps === 2 || bitrateMbps === 4 || bitrateMbps === 8 || bitrateMbps === 12) &&
+    (fps === 15 || fps === 30 || fps === 60)
+  ) {
+    return { bitrateMbps, fps };
+  }
+  return undefined;
 }
 
 function isLocalBind(bindHost: string): boolean {

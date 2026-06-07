@@ -58,7 +58,7 @@ describe("agent security helpers", () => {
   });
 
   it("validates token expiry and token matching", () => {
-    const record = createSessionToken("session", "serial", 100, 10);
+    const record = createSessionToken("session", "serial", 100, 10, { bitrateMbps: 4, fps: 30 });
 
     expect(isTokenExpired(record, 109)).toBe(false);
     expect(isTokenExpired(record, 110)).toBe(true);

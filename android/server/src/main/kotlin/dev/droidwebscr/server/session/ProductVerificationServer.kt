@@ -30,6 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class ProductVerificationServer(
     private val socketName: String,
+    private val initialVideoSettings: InitialVideoSettings = InitialVideoSettings(),
     private val captureBackend: DisplayCaptureBackend = ShellDisplayCaptureBackend(),
     private val encoder: VideoEncoder = MediaCodecVideoEncoder(),
     private val inputInjectorFactory: (InputDisplayBounds) -> InputInjector = { bounds -> ShellInputInjector(displayBounds = bounds) },
@@ -65,8 +66,8 @@ class ProductVerificationServer(
         val config = VideoEncoderConfig(
             width = outputSize.width,
             height = outputSize.height,
-            bitrate = 2_000_000,
-            fps = 30,
+            bitrate = initialVideoSettings.bitrateMbps * 1_000_000,
+            fps = initialVideoSettings.fps,
         ).validated()
         encoder.start(config)
         val captureSession = captureBackend.start(
@@ -124,7 +125,9 @@ class ProductVerificationServer(
             }
             val log = runCatching { dispatcher.dispatch(frame) }
                 .getOrElse { error -> "control:rejected:${error.message}" }
-            writeLog(frameWriter, log)
+            if (shouldWriteAgentLog(log)) {
+                writeLog(frameWriter, log)
+            }
         }
     }
 
@@ -174,6 +177,20 @@ class ProductVerificationServer(
 
     private companion object {
         const val MAX_PAYLOAD_LENGTH_BYTES = 16 * 1024 * 1024
+    }
+}
+
+internal fun shouldWriteAgentLog(message: String): Boolean =
+    !(message.startsWith("control:") && message.endsWith(":Accepted"))
+
+data class InitialVideoSettings(
+    val bitrateMbps: Int = 4,
+    val fps: Int = 30,
+) {
+    fun validated(): InitialVideoSettings {
+        require(bitrateMbps in setOf(2, 4, 8, 12)) { "Unsupported bitrate $bitrateMbps Mbps." }
+        require(fps in setOf(15, 30, 60)) { "Unsupported fps $fps." }
+        return this
     }
 }
 

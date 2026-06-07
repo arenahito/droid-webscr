@@ -1,11 +1,17 @@
 import { AdbProvider, isUsableDevice } from "@droid-webscr/adb";
-import { createSessionToken, SessionTokenRecord } from "../security/session-token.js";
+import {
+  createSessionToken,
+  SessionTokenRecord,
+  SessionVideoSettings,
+} from "../security/session-token.js";
 
 export interface CreateSessionResult {
   readonly serial: string;
   readonly sessionId: string;
   readonly token: string;
 }
+
+export type { SessionVideoSettings };
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionTokenRecord>();
@@ -18,20 +24,23 @@ export class SessionManager {
     private readonly ttlMs = 60_000,
   ) {}
 
-  public create(deviceSerial: string): Promise<CreateSessionResult> {
+  public create(deviceSerial: string, video: SessionVideoSettings): Promise<CreateSessionResult> {
     const inFlight = this.inFlightCreatesByDeviceSerial.get(deviceSerial);
     if (inFlight) {
       return inFlight;
     }
     this.deleteActiveSessionForDevice(deviceSerial);
-    const created = this.createFresh(deviceSerial).finally(() => {
+    const created = this.createFresh(deviceSerial, video).finally(() => {
       this.inFlightCreatesByDeviceSerial.delete(deviceSerial);
     });
     this.inFlightCreatesByDeviceSerial.set(deviceSerial, created);
     return created;
   }
 
-  private async createFresh(deviceSerial: string): Promise<CreateSessionResult> {
+  private async createFresh(
+    deviceSerial: string,
+    video: SessionVideoSettings,
+  ): Promise<CreateSessionResult> {
     const devices = await this.adbProvider.listDevices();
     this.deleteActiveSessionForDevice(deviceSerial);
     const device = devices.find((item) => item.serial === deviceSerial);
@@ -39,7 +48,7 @@ export class SessionManager {
       throw new Error("Device is not available for session creation.");
     }
     const sessionId = crypto.randomUUID();
-    const record = createSessionToken(sessionId, deviceSerial, this.now(), this.ttlMs);
+    const record = createSessionToken(sessionId, deviceSerial, this.now(), this.ttlMs, video);
     this.sessions.set(sessionId, record);
     this.sessionsByDeviceSerial.set(deviceSerial, sessionId);
     return {

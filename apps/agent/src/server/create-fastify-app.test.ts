@@ -380,6 +380,30 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("uses requested video settings when opening the device session", async () => {
+    const context = testContext();
+    const app = await createFastifyApp(context);
+
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554", video: { bitrateMbps: 12, fps: 60 } },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(context.deviceServer.startedVideos).toEqual([{ bitrateMbps: 12, fps: 60 }]);
+    ws.terminate();
+    await app.close();
+  });
+
   it("rejects session creation without a serial", async () => {
     const app = await createFastifyApp(testContext());
 
@@ -391,6 +415,20 @@ describe("agent server", () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({ error: "serial is required" });
+    await app.close();
+  });
+
+  it("rejects unsupported video settings", async () => {
+    const app = await createFastifyApp(testContext());
+
+    const response = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554", video: { bitrateMbps: 6, fps: 24 } },
+      url: "/api/sessions",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toEqual({ error: "supported video settings are required" });
     await app.close();
   });
 
@@ -695,6 +733,7 @@ function testContext(
   const stopCalls: string[] = [];
   const writes: Uint8Array[] = [];
   const startedSerials: string[] = [];
+  const startedVideos: Array<{ readonly bitrateMbps: number; readonly fps: number }> = [];
   const deviceFrames: Uint8Array[] = [];
   let pendingDeviceFrame: (() => void) | undefined;
   const nextDeviceFrame = async () => {
@@ -711,14 +750,16 @@ function testContext(
     config,
     deviceServer: {
       startedSerials,
+      startedVideos,
       stopCalls,
       writes,
       pushFromDevice(frame: Uint8Array) {
         deviceFrames.push(frame);
         pendingDeviceFrame?.();
       },
-      async start(serial: string) {
+      async start(serial: string, video: { readonly bitrateMbps: number; readonly fps: number }) {
         startedSerials.push(serial);
+        startedVideos.push(video);
         return {
           frames: (async function* (): AsyncIterable<Uint8Array> {
             yield await nextDeviceFrame();

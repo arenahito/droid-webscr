@@ -3,6 +3,8 @@ import { AdbAuthorizationState, AdbTransportKind, FakeAdbProvider } from "@droid
 import { createSessionToken } from "../security/session-token.js";
 import { SessionManager } from "./session-manager.js";
 
+const video = { bitrateMbps: 4, fps: 30 };
+
 describe("session manager", () => {
   it("rejects unavailable devices and expires sessions", async () => {
     let now = 100;
@@ -23,8 +25,8 @@ describe("session manager", () => {
       10,
     );
 
-    await expect(manager.create("offline")).rejects.toThrow("Device is not available");
-    const created = await manager.create("online");
+    await expect(manager.create("offline", video)).rejects.toThrow("Device is not available");
+    const created = await manager.create("online", video);
     expect(manager.verify(created.sessionId, created.token)?.deviceSerial).toBe("online");
     now = 111;
     expect(manager.verify(created.sessionId, created.token)).toBeUndefined();
@@ -47,8 +49,8 @@ describe("session manager", () => {
       100,
     );
 
-    const first = await manager.create("emulator-5554");
-    const replacement = await manager.create("emulator-5554");
+    const first = await manager.create("emulator-5554", video);
+    const replacement = await manager.create("emulator-5554", video);
 
     expect(replacement.sessionId).not.toBe(first.sessionId);
     expect(manager.verify(first.sessionId, first.token)).toBeUndefined();
@@ -62,7 +64,7 @@ describe("session manager", () => {
     expect(manager.cleanupExpired()).toBe(1);
     expect(manager.verify(replacement.sessionId, replacement.token)).toBeUndefined();
 
-    const next = await manager.create("emulator-5554");
+    const next = await manager.create("emulator-5554", video);
     expect(next.sessionId).not.toBe(replacement.sessionId);
   });
 
@@ -79,10 +81,10 @@ describe("session manager", () => {
       () => now,
       100,
     );
-    const expired = await manager.create("emulator-5554");
+    const expired = await manager.create("emulator-5554", video);
 
     now = 1_101;
-    const fresh = await manager.create("emulator-5554");
+    const fresh = await manager.create("emulator-5554", video);
 
     expect(fresh.sessionId).not.toBe(expired.sessionId);
     expect(manager.verify(expired.sessionId, expired.token)).toBeUndefined();
@@ -103,18 +105,18 @@ describe("session manager", () => {
     );
 
     const [first, second] = await Promise.all([
-      manager.create("emulator-5554"),
-      manager.create("emulator-5554"),
+      manager.create("emulator-5554", video),
+      manager.create("emulator-5554", video),
     ]);
 
     expect(second).toEqual(first);
-    const active = await manager.create("emulator-5554");
+    const active = await manager.create("emulator-5554", video);
     expect(active.sessionId).not.toBe(first.sessionId);
     expect(manager.verify(first.sessionId, first.token)).toBeUndefined();
 
     now = 2_101;
     expect(manager.cleanupExpired()).toBe(1);
-    const fresh = await manager.create("emulator-5554");
+    const fresh = await manager.create("emulator-5554", video);
     expect(fresh.sessionId).not.toBe(active.sessionId);
   });
 
@@ -142,8 +144,8 @@ describe("session manager", () => {
       () => 3_000,
       100,
     );
-    const pending = manager.create("emulator-5554");
-    const injected = createSessionToken("injected-session", "emulator-5554", 3_000, 100);
+    const pending = manager.create("emulator-5554", video);
+    const injected = createSessionToken("injected-session", "emulator-5554", 3_000, 100, video);
     (manager as unknown as { sessions: Map<string, typeof injected> }).sessions.set(
       injected.sessionId,
       injected,
@@ -175,7 +177,7 @@ describe("session manager", () => {
       manager as unknown as { sessionsByDeviceSerial: Map<string, string> }
     ).sessionsByDeviceSerial.set("emulator-5554", "missing-session");
 
-    const created = await manager.create("emulator-5554");
+    const created = await manager.create("emulator-5554", video);
 
     expect(created.serial).toBe("emulator-5554");
     expect(manager.verify(created.sessionId, created.token)).toBeDefined();
@@ -183,8 +185,8 @@ describe("session manager", () => {
 
   it("does not remove a newer device index when cleaning up or deleting stale records", () => {
     const manager = new SessionManager(new FakeAdbProvider([]), () => 5_000, 100);
-    const expired = createSessionToken("expired-session", "emulator-5554", 4_000, 100);
-    const active = createSessionToken("active-session", "emulator-5554", 5_000, 100);
+    const expired = createSessionToken("expired-session", "emulator-5554", 4_000, 100, video);
+    const active = createSessionToken("active-session", "emulator-5554", 5_000, 100, video);
     const internals = manager as unknown as {
       sessions: Map<string, typeof expired>;
       sessionsByDeviceSerial: Map<string, string>;

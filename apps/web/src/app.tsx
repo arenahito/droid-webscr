@@ -617,26 +617,28 @@ export function DroidWebscrApp({
           />
         )}
         <section className="viewport-grid bg-viewport">
-          <AndroidViewport
-            canvasRef={canvasRef}
-            device={selectedDevice}
-            onBeforeInput={sendText}
-            onCompositionEnd={(event) => sendTextValue(event.data)}
-            onKeyDown={sendKey}
-            onKeyUp={sendKey}
-            onPointerCancel={(event) => sendPointer(event, "cancel")}
-            onPointerDown={(event) => sendPointer(event, "down")}
-            onPointerMove={(event) => {
-              if (event.buttons !== 0) {
-                sendPointer(event, "move");
-              }
-            }}
-            onPointerUp={(event) => sendPointer(event, "up")}
-            rotation={rotation}
-            textInputRef={textInputRef}
-            videoSnapshot={videoSnapshot}
-          />
-          <AndroidControls onSystemAction={requestSystemAction} />
+          <div className={cn("stage-pair", isLandscapeRotation(rotation) && "is-landscape")}>
+            <AndroidViewport
+              canvasRef={canvasRef}
+              device={selectedDevice}
+              onBeforeInput={sendText}
+              onCompositionEnd={(event) => sendTextValue(event.data)}
+              onKeyDown={sendKey}
+              onKeyUp={sendKey}
+              onPointerCancel={(event) => sendPointer(event, "cancel")}
+              onPointerDown={(event) => sendPointer(event, "down")}
+              onPointerMove={(event) => {
+                if (event.buttons !== 0) {
+                  sendPointer(event, "move");
+                }
+              }}
+              onPointerUp={(event) => sendPointer(event, "up")}
+              rotation={rotation}
+              textInputRef={textInputRef}
+              videoSnapshot={videoSnapshot}
+            />
+            <AndroidControls onSystemAction={requestSystemAction} />
+          </div>
         </section>
       </div>
       <LogDrawer
@@ -1062,9 +1064,16 @@ function AndroidViewport({
   readonly videoSnapshot: VideoPipelineSnapshot | undefined;
 }): React.ReactElement {
   const status = describeVideoStatus(videoSnapshot);
+  const landscape = isLandscapeRotation(rotation);
   return (
     <section aria-label="Android screen viewport" className="stage">
-      <div className="phone-shell" style={{ transform: `rotate(${rotation}deg)` }}>
+      <div
+        className={cn(
+          "phone-shell",
+          landscape && "is-landscape",
+          rotation === 180 && "rotation-180",
+        )}
+      >
         <div className="phone-statusbar">
           <span>10:42</span>
           <span title={device?.serial ?? "waiting"}>Wi-Fi 100%</span>
@@ -1538,6 +1547,11 @@ function nextSequence(sequence: React.MutableRefObject<bigint>): bigint {
 function normalizeRotation(rotation: number): 0 | 90 | 180 | 270 {
   const normalized = ((rotation % 360) + 360) % 360;
   return normalized === 90 || normalized === 180 || normalized === 270 ? normalized : 0;
+}
+
+function isLandscapeRotation(rotation: number): boolean {
+  const normalized = normalizeRotation(rotation);
+  return normalized === 90 || normalized === 270;
 }
 
 function extractInsertedText(event: Event): string | undefined {

@@ -639,8 +639,14 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
     await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
 
     const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    canvas.setPointerCapture = setPointerCapture;
+    canvas.releasePointerCapture = releasePointerCapture;
     canvas.getBoundingClientRect = () =>
       ({
         bottom: 100,
@@ -658,28 +664,41 @@ describe("DroidWebscrApp", () => {
       buttons: 1,
       clientX: 60,
       clientY: 70,
+      pointerId: 23,
       pressure: 0.5,
     });
     fireEvent.pointerMove(canvas, {
       buttons: 1,
-      clientX: 70,
-      clientY: 80,
+      clientX: 65,
+      clientY: 75,
+      pointerId: 23,
       pressure: 0.5,
     });
     fireEvent.pointerMove(canvas, {
       buttons: 0,
-      clientX: 80,
-      clientY: 90,
+      clientX: 70,
+      clientY: 80,
+      pointerId: 23,
     });
     fireEvent.pointerCancel(canvas, {
       buttons: 0,
-      clientX: 80,
-      clientY: 90,
+      clientX: 70,
+      clientY: 80,
+      pointerId: 23,
     });
     fireEvent.pointerUp(canvas, {
       buttons: 0,
       clientX: 90,
       clientY: 95,
+      pointerId: 23,
+    });
+    await waitFor(() => {
+      expect(
+        socket.sent
+          .slice(1)
+          .map(decodedType)
+          .filter((type) => type === MessageType.ControlPointer),
+      ).toHaveLength(2);
     });
     fireEvent.keyDown(canvas, {
       code: "Enter",
@@ -729,12 +748,862 @@ describe("DroidWebscrApp", () => {
     expect(sentTypes).toEqual([
       MessageType.ControlPointer,
       MessageType.ControlPointer,
-      MessageType.ControlPointer,
-      MessageType.ControlPointer,
       MessageType.ControlKey,
       MessageType.ControlKey,
       MessageType.ControlText,
       MessageType.ControlText,
+    ]);
+    expect(setPointerCapture).toHaveBeenCalledWith(23);
+    expect(releasePointerCapture).toHaveBeenCalledWith(23);
+  });
+
+  it("interpolates long pointer drags into continuous move frames", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+
+    await waitFor(() => {
+      expect(socket.sent.slice(1).map(decodedType)).toHaveLength(9);
+    });
+    const pointerFrames = socket.sent.slice(1).map(decodePointerPayload);
+    const buttonStates = socket.sent.slice(1).map(decodePointerButtons);
+    const moveFrames = pointerFrames.filter((frame) => frame.action === 1);
+    expect(pointerFrames.at(0)).toEqual({ action: 0, pointerId: 0, x: 100, y: 500 });
+    expect(pointerFrames.at(-1)).toEqual({ action: 2, pointerId: 0, x: 900, y: 500 });
+    expect(moveFrames).toHaveLength(7);
+    expect(moveFrames.map((frame) => frame.x)).toEqual([210, 330, 440, 560, 670, 790, 900]);
+    expect(buttonStates.at(0)).toBe(1);
+    expect(buttonStates.slice(1, -1).every((buttons) => buttons === 1)).toBe(true);
+    expect(buttonStates.at(-1)).toBe(0);
+  });
+
+  it("does not replay delayed drag frames into a later session", async () => {
+    const user = userEvent.setup();
+    const sockets = [new FakeBinaryWebSocket(), new FakeBinaryWebSocket()];
+    let sessionIndex = 0;
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: `s-${++sessionIndex}`,
+            serial: "emulator-5554",
+            token: `token-${sessionIndex}`,
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(sockets[sessionIndex - 1]!)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    sockets[0]!.open();
+    await screen.findByText("Session s-1");
+    sockets[0]!.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    sockets[1]!.open();
+    await screen.findByText("Session s-2");
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(sockets[1]!.sent.map(decodedType)).toEqual([MessageType.SessionHello]);
+  });
+
+  it("does not replay delayed drag frames into a later gesture with the same pointer id", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 20, clientY: 40, pointerId: 101 });
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 500 },
+      { action: 2, pointerId: 0, x: 900, y: 500 },
+      { action: 0, pointerId: 0, x: 200, y: 400 },
+    ]);
+  });
+
+  it("does not replay delayed drag frames into a later gesture that reuses the Android pointer slot", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 20, clientY: 40, pointerId: 202 });
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 500 },
+      { action: 1, pointerId: 0, x: 210, y: 500 },
+      { action: 1, pointerId: 0, x: 330, y: 500 },
+      { action: 1, pointerId: 0, x: 440, y: 500 },
+      { action: 1, pointerId: 0, x: 560, y: 500 },
+      { action: 1, pointerId: 0, x: 670, y: 500 },
+      { action: 1, pointerId: 0, x: 790, y: 500 },
+      { action: 1, pointerId: 0, x: 900, y: 500 },
+      { action: 2, pointerId: 0, x: 900, y: 500 },
+      { action: 0, pointerId: 0, x: 200, y: 400 },
+    ]);
+  });
+
+  it("maps simultaneous browser pointers to separate Android pointer ids", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 500 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 200,
+        height: 200,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 20, clientY: 40, pointerId: 101 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 80, clientY: 160, pointerId: 202 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 10, clientY: 30, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 170, pointerId: 202 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 10, clientY: 30, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 170, pointerId: 202 });
+
+    await waitFor(() => {
+      expect(socket.sent.slice(1).map(decodePointerPayload)).toHaveLength(8);
+    });
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 200 },
+      { action: 0, pointerId: 1, x: 400, y: 800 },
+      { action: 1, pointerId: 0, x: 75, y: 175 },
+      { action: 1, pointerId: 1, x: 425, y: 825 },
+      { action: 1, pointerId: 0, x: 50, y: 150 },
+      { action: 2, pointerId: 0, x: 50, y: 150 },
+      { action: 1, pointerId: 1, x: 450, y: 850 },
+      { action: 2, pointerId: 1, x: 450, y: 850 },
+    ]);
+  });
+
+  it("turns modified pointer drags into synthetic pinch gestures", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 500 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 200,
+        height: 200,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, {
+      buttons: 1,
+      clientX: 50,
+      clientY: 100,
+      ctrlKey: true,
+      pointerId: 303,
+    });
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      clientX: 80,
+      clientY: 160,
+      ctrlKey: true,
+      pointerId: 303,
+    });
+    fireEvent.pointerUp(canvas, {
+      buttons: 0,
+      clientX: 80,
+      clientY: 160,
+      ctrlKey: true,
+      pointerId: 303,
+    });
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 250, y: 340 },
+      { action: 0, pointerId: 1, x: 250, y: 660 },
+      { action: 1, pointerId: 0, x: 400, y: 800 },
+      { action: 1, pointerId: 1, x: 100, y: 200 },
+      { action: 2, pointerId: 1, x: 100, y: 200 },
+      { action: 2, pointerId: 0, x: 400, y: 800 },
+    ]);
+    expect(socket.sent.slice(1).map(decodePointerButtons)).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+
+  it("sends a single cancel frame for synthetic pinch cancellation", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 500 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 200,
+        height: 200,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, {
+      buttons: 1,
+      clientX: 50,
+      clientY: 100,
+      ctrlKey: true,
+      pointerId: 303,
+    });
+    fireEvent.pointerCancel(canvas, {
+      buttons: 0,
+      clientX: 50,
+      clientY: 100,
+      ctrlKey: true,
+      pointerId: 303,
+    });
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 250, y: 340 },
+      { action: 0, pointerId: 1, x: 250, y: 660 },
+      { action: 3, pointerId: 0, x: 250, y: 340 },
+    ]);
+  });
+
+  it("clears every active pointer after a browser pointer cancel", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 500 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 200,
+        height: 200,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 20, clientY: 40, pointerId: 101 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 80, clientY: 160, pointerId: 202 });
+    fireEvent.pointerCancel(canvas, { buttons: 0, clientX: 80, clientY: 160, pointerId: 202 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 40, clientY: 80, pointerId: 303 });
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 200 },
+      { action: 0, pointerId: 1, x: 400, y: 800 },
+      { action: 3, pointerId: 1, x: 400, y: 800 },
+      { action: 0, pointerId: 0, x: 200, y: 400 },
+    ]);
+  });
+
+  it("drops queued frames for already released pointers after a browser pointer cancel", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 50, clientY: 50, pointerId: 202 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerCancel(canvas, { buttons: 0, clientX: 50, clientY: 50, pointerId: 202 });
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 500 },
+      { action: 0, pointerId: 1, x: 500, y: 500 },
+      { action: 3, pointerId: 1, x: 500, y: 500 },
+    ]);
+  });
+
+  it("queues synthetic pinch start behind an unfinished same-pointer release", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerDown(canvas, {
+      buttons: 1,
+      clientX: 50,
+      clientY: 50,
+      ctrlKey: true,
+      pointerId: 101,
+    });
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      clientX: 80,
+      clientY: 50,
+      ctrlKey: true,
+      pointerId: 101,
+    });
+    fireEvent.pointerUp(canvas, {
+      buttons: 0,
+      clientX: 80,
+      clientY: 50,
+      ctrlKey: true,
+      pointerId: 101,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 500 },
+      { action: 2, pointerId: 0, x: 900, y: 500 },
+      { action: 0, pointerId: 0, x: 500, y: 180 },
+      { action: 0, pointerId: 1, x: 500, y: 820 },
+      { action: 1, pointerId: 0, x: 800, y: 500 },
+      { action: 1, pointerId: 1, x: 200, y: 500 },
+      { action: 2, pointerId: 1, x: 200, y: 500 },
+      { action: 2, pointerId: 0, x: 800, y: 500 },
+    ]);
+  });
+
+  it("queues synthetic pinch start behind an unfinished reused Android slot release", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
+    fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerDown(canvas, {
+      buttons: 1,
+      clientX: 50,
+      clientY: 50,
+      ctrlKey: true,
+      pointerId: 202,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+
+    expect(socket.sent.slice(1).map(decodePointerPayload)).toEqual([
+      { action: 0, pointerId: 0, x: 100, y: 500 },
+      { action: 1, pointerId: 0, x: 210, y: 500 },
+      { action: 1, pointerId: 0, x: 330, y: 500 },
+      { action: 1, pointerId: 0, x: 440, y: 500 },
+      { action: 1, pointerId: 0, x: 560, y: 500 },
+      { action: 1, pointerId: 0, x: 670, y: 500 },
+      { action: 1, pointerId: 0, x: 790, y: 500 },
+      { action: 1, pointerId: 0, x: 900, y: 500 },
+      { action: 2, pointerId: 0, x: 900, y: 500 },
+      { action: 0, pointerId: 0, x: 500, y: 180 },
+      { action: 0, pointerId: 1, x: 500, y: 820 },
     ]);
   });
 
@@ -1319,6 +2188,42 @@ describe("DroidWebscrApp", () => {
 function decodedType(frame: Uint8Array): number | undefined {
   const decoded = decodeFrame(frame);
   return decoded.ok ? decoded.value.header.type : undefined;
+}
+
+function decodePointerPayload(frame: Uint8Array): {
+  readonly action: number;
+  readonly pointerId: number;
+  readonly x: number;
+  readonly y: number;
+} {
+  const decoded = decodeFrame(frame);
+  if (!decoded.ok || decoded.value.header.type !== MessageType.ControlPointer) {
+    throw new Error("Expected a pointer control frame.");
+  }
+  const view = new DataView(
+    decoded.value.payload.buffer,
+    decoded.value.payload.byteOffset,
+    decoded.value.payload.byteLength,
+  );
+  return {
+    action: view.getUint8(0),
+    pointerId: view.getUint16(2, false),
+    x: view.getUint32(4, false),
+    y: view.getUint32(8, false),
+  };
+}
+
+function decodePointerButtons(frame: Uint8Array): number {
+  const decoded = decodeFrame(frame);
+  if (!decoded.ok || decoded.value.header.type !== MessageType.ControlPointer) {
+    throw new Error("Expected a pointer control frame.");
+  }
+  const view = new DataView(
+    decoded.value.payload.buffer,
+    decoded.value.payload.byteOffset,
+    decoded.value.payload.byteLength,
+  );
+  return view.getUint16(14, false);
 }
 
 class FakeVideoPipeline implements VideoPipeline {

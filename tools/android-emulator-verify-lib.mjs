@@ -3,11 +3,12 @@ import { constants } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import net from "node:net";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const remoteArtifactPath = "/data/local/tmp/droid-webscr-server.jar";
-const socketName = "droid-webscr";
+const defaultSocketNamePrefix = "droid-webscr-verify";
 const localArtifactPath = "android/server/build/droid-webscr-server-android.jar";
 const frameHeaderLength = 40;
 const frameMagic = 0x44575343;
@@ -35,6 +36,7 @@ export async function runAndroidEmulatorVerification(options = {}) {
   const artifactPath = options.artifactPath ?? localArtifactPath;
   const buildServerArtifact = options.buildServerArtifact ?? buildAndroidServerArtifact;
   const connectTcpSocket = options.connectTcpSocket ?? connectTcpProtocolSocket;
+  const socketName = options.socketName ?? `${defaultSocketNamePrefix}-${randomUUID()}`;
   let forwardedPort;
   let server;
 
@@ -127,17 +129,16 @@ async function verifyProductRoundTrip(connectTcpSocket, forwardedPort) {
     });
 
     const controlFrames = [
-      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame(0, 3n) },
-      { expectation: "control:pointer:Accepted", frame: createControlPointerFrame(2, 4n) },
-      { expectation: "control:key:Accepted", frame: createControlKeyFrame(0, 5n) },
-      { expectation: "control:key:Accepted", frame: createControlKeyFrame(1, 6n) },
-      { expectation: "control:text:Accepted", frame: createControlTextFrame("hello") },
-      { expectation: "control:home:Accepted", frame: createControlSystemFrame() },
+      ...createPointerVerificationFrames(readVideoConfigSize(videoConfig)),
+      { expectation: "control:key:Accepted", frame: createControlKeyFrame(0, 12n) },
+      { expectation: "control:key:Accepted", frame: createControlKeyFrame(1, 13n) },
+      { expectation: "control:text:Accepted", frame: createControlTextFrame("hello", 14n) },
+      { expectation: "control:home:Accepted", frame: createControlSystemFrame(15n) },
       {
         expectation: "clipboard:set:Rejected(Clipboard sync is disabled by policy.)",
-        frame: createControlClipboardFrame(),
+        frame: createControlClipboardFrame(16n),
       },
-      { expectation: "video:reconfigure:Accepted", frame: createVideoReconfigureFrame() },
+      { expectation: "video:reconfigure:Accepted", frame: createVideoReconfigureFrame(17n) },
     ];
     const controlLogs = await verifyControlFrames(socket, controlFrames);
 
@@ -263,6 +264,8 @@ export function createVideoConfigFrame() {
   const payload = new Uint8Array(17);
   payload[0] = 1;
   payload[1] = 1;
+  new DataView(payload.buffer).setUint32(4, 720, false);
+  new DataView(payload.buffer).setUint32(8, 1280, false);
   payload[15] = 1;
   payload[16] = 0x67;
   return createFrame(messageTypeVideoConfig, 2n, {
@@ -294,24 +297,79 @@ function createHelloFrame() {
   return createFrame(messageTypeSessionHello, helloSequence);
 }
 
-function createControlSystemFrame() {
-  return createFrame(messageTypeControlSystem, 7n, {
+function createControlSystemFrame(sequence) {
+  return createFrame(messageTypeControlSystem, sequence, {
     payload: new Uint8Array([1]),
     streamId: streamIdControl,
   });
 }
 
-function createControlPointerFrame(action, sequence) {
+function createControlPointerFrame({ action, pointerId = 0, sequence, x, y }) {
   const payload = new Uint8Array(20);
   const view = new DataView(payload.buffer);
   view.setUint8(0, action);
-  view.setUint16(2, 1, false);
-  view.setUint32(4, 24, false);
-  view.setUint32(8, 48, false);
+  view.setUint16(2, pointerId, false);
+  view.setUint32(4, x, false);
+  view.setUint32(8, y, false);
   view.setUint8(12, action === 2 ? 0 : 255);
   view.setUint16(14, action === 2 ? 0 : 1, false);
   view.setUint32(16, 0, false);
   return createFrame(messageTypeControlPointer, sequence, { payload, streamId: streamIdControl });
+}
+
+function createPointerVerificationFrames(size) {
+  const dragStart = pointAt(size, 0.2, 0.2);
+  const dragMove = pointAt(size, 0.45, 0.45);
+  const dragEnd = pointAt(size, 0.7, 0.7);
+  const pinchStartA = pointAt(size, 0.4, 0.62);
+  const pinchStartB = pointAt(size, 0.6, 0.62);
+  const pinchEndA = pointAt(size, 0.3, 0.62);
+  const pinchEndB = pointAt(size, 0.7, 0.62);
+  return [
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 0, sequence: 3n, ...dragStart }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 1, sequence: 4n, ...dragMove }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 2, sequence: 5n, ...dragEnd }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 0, pointerId: 0, sequence: 6n, ...pinchStartA }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 0, pointerId: 1, sequence: 7n, ...pinchStartB }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 1, pointerId: 0, sequence: 8n, ...pinchEndA }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 1, pointerId: 1, sequence: 9n, ...pinchEndB }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 2, pointerId: 1, sequence: 10n, ...pinchEndB }),
+    },
+    {
+      expectation: "control:pointer:Accepted",
+      frame: createControlPointerFrame({ action: 2, pointerId: 0, sequence: 11n, ...pinchEndA }),
+    },
+  ];
+}
+
+function pointAt(size, xRatio, yRatio) {
+  return {
+    x: Math.min(size.width - 1, Math.max(0, Math.round(size.width * xRatio))),
+    y: Math.min(size.height - 1, Math.max(0, Math.round(size.height * yRatio))),
+  };
 }
 
 function createControlKeyFrame(action, sequence) {
@@ -324,27 +382,27 @@ function createControlKeyFrame(action, sequence) {
   return createFrame(messageTypeControlKey, sequence, { payload, streamId: streamIdControl });
 }
 
-function createControlTextFrame(text) {
-  return createFrame(messageTypeControlText, 8n, {
+function createControlTextFrame(text, sequence) {
+  return createFrame(messageTypeControlText, sequence, {
     payload: new TextEncoder().encode(text),
     streamId: streamIdControl,
   });
 }
 
-function createControlClipboardFrame() {
+function createControlClipboardFrame(sequence) {
   const text = new TextEncoder().encode("blocked");
   const payload = new Uint8Array(1 + text.byteLength);
   payload[0] = 0;
   payload.set(text, 1);
-  return createFrame(messageTypeControlClipboard, 9n, { payload, streamId: streamIdControl });
+  return createFrame(messageTypeControlClipboard, sequence, { payload, streamId: streamIdControl });
 }
 
-function createVideoReconfigureFrame() {
+function createVideoReconfigureFrame(sequence) {
   const payload = new Uint8Array(8);
   const view = new DataView(payload.buffer);
   view.setUint32(0, 4, false);
   view.setUint32(4, 45, false);
-  return createFrame(messageTypeVideoReconfigure, 10n, { payload, streamId: streamIdVideo });
+  return createFrame(messageTypeVideoReconfigure, sequence, { payload, streamId: streamIdVideo });
 }
 
 function createFrame(type, sequence, options = {}) {
@@ -449,6 +507,20 @@ function frameStreamId(frame) {
 function payloadBytes(frame) {
   const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
   return bytes.slice(frameHeaderLength);
+}
+
+function readVideoConfigSize(frame) {
+  const payload = payloadBytes(frame);
+  if (payload.byteLength < 12) {
+    throw new Error("VIDEO_CONFIG payload was too short to contain a coded size.");
+  }
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  const width = view.getUint32(4, false);
+  const height = view.getUint32(8, false);
+  if (width <= 0 || height <= 0) {
+    throw new Error(`VIDEO_CONFIG contained invalid coded size ${width}x${height}.`);
+  }
+  return { height, width };
 }
 
 async function readLogText(socket, expectation = "control") {

@@ -83,6 +83,13 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
     createLogFrame("control:pointer:Accepted"),
     createVideoFrame(),
     createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
+    createLogFrame("control:pointer:Accepted"),
     createLogFrame("control:key:Accepted"),
     createLogFrame("control:key:Accepted"),
     createLogFrame("control:text:Accepted"),
@@ -107,6 +114,7 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
       return sockets.shift();
     },
     runner,
+    socketName: "droid-webscr",
   });
 
   assert.equal(result.serial, "emulator-5554");
@@ -130,12 +138,26 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
       "socket.writeFrame",
       "socket.writeFrame",
       "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
+      "socket.writeFrame",
       "socket.close",
       "-s emulator-5554 forward --remove tcp:41001",
       "-s emulator-5554 shell rm -f /data/local/tmp/droid-webscr-server.jar",
     ],
   );
   assert.deepEqual(result.controlLogs, [
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
+    "control:pointer:Accepted",
     "control:pointer:Accepted",
     "control:pointer:Accepted",
     "control:key:Accepted",
@@ -145,6 +167,21 @@ test("builds, deploys, starts, verifies HELLO, and cleans up the Android server"
     "clipboard:set:Rejected(Clipboard sync is disabled by policy.)",
     "video:reconfigure:Accepted",
   ]);
+  assert.deepEqual(
+    calls
+      .filter((call) => call.kind === "socket.writeFrame")
+      .map((call) => call.frame)
+      .filter((frame) => frameType(frame) === 0x0301)
+      .map(pointerId),
+    [0, 0, 0, 0, 1, 0, 1, 1, 0],
+  );
+  assert.deepEqual(
+    calls
+      .filter((call) => call.kind === "socket.writeFrame")
+      .map((call) => call.frame)
+      .map(frameSequence),
+    [1n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n, 17n],
+  );
 });
 
 function fakeRunner(script, calls = []) {
@@ -166,4 +203,16 @@ function fakeRunner(script, calls = []) {
 
 function serialArgs(...args) {
   return ["-s", "emulator-5554", ...args];
+}
+
+function frameType(frame) {
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(8, false);
+}
+
+function pointerId(frame) {
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(42, false);
+}
+
+function frameSequence(frame) {
+  return new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getBigUint64(28, false);
 }

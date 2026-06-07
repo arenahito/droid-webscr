@@ -1,5 +1,7 @@
 package dev.droidwebscr.server.input
 
+import java.io.Closeable
+
 interface InputInjector {
     fun injectPointer(event: PointerControlMessage): InjectionResult
     fun injectKey(event: KeyControlMessage): InjectionResult
@@ -102,16 +104,19 @@ sealed interface InjectionResult {
     data class Rejected(val reason: String) : InjectionResult
 }
 
-interface InputEventAdapter {
+interface InputEventAdapter : Closeable {
     fun injectKey(event: KeyControlMessage): Boolean
     fun injectPointer(event: PointerControlMessage): Boolean
     fun injectText(text: String): Boolean
+    override fun close() = Unit
 }
 
 class ShellInputInjector(
-    private val adapter: InputEventAdapter = ReflectionInputEventAdapter(),
+    adapter: InputEventAdapter? = null,
     private val displayBounds: InputDisplayBounds,
-) : InputInjector {
+) : InputInjector, Closeable {
+    private val adapter = adapter ?: HybridInputEventAdapter.createDefault(displayBounds)
+
     override fun injectPointer(event: PointerControlMessage): InjectionResult =
         runCatching { adapter.injectPointer(event.validated(displayBounds)) }
             .toInjectionResult("Pointer event")
@@ -142,6 +147,10 @@ class ShellInputInjector(
             downAccepted && upAccepted
         }
             .toInjectionResult("System action")
+    }
+
+    override fun close() {
+        adapter.close()
     }
 
     private fun Result<Boolean>.toInjectionResult(label: String): InjectionResult =

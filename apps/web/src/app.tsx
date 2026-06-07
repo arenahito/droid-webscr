@@ -84,6 +84,20 @@ type DialogKind =
   | "session-actions"
   | undefined;
 
+interface PinchGesture {
+  readonly browserPointerId: number;
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly primarySlot: number;
+  readonly queueKey: number | undefined;
+  readonly secondarySlot: number;
+}
+
+interface ClientPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 const defaultSessionState: SessionState = {
   logs: [],
   phase: "idle",
@@ -103,6 +117,9 @@ const phoneViewportPaddingPx = 36;
 const phoneControlGapPx = 20;
 const phoneControlRailHeightPx = 38;
 const phoneControlRailWidthPx = 46;
+const pointerDragFrameIntervalMs = 8;
+const pointerDragInterpolationStepPx = 12;
+const syntheticPinchRadiusPx = 32;
 
 const designInitialLogs: readonly string[] = [
   "10:42:10.231 INFO   stream     Starting stream: 1344x2992@30fps bitrate=4Mbps transport=USB",
@@ -153,7 +170,13 @@ export function DroidWebscrApp({
   const textInputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const sessionSocketRef = React.useRef<SessionSocket | undefined>(undefined);
   const videoPipelineRef = React.useRef<VideoPipeline | undefined>(undefined);
-  const pointerIdRef = React.useRef(0);
+  const activePointerSlotsRef = React.useRef(new Map<number, number>());
+  const pointerPositionsRef = React.useRef(new Map<number, ClientPoint>());
+  const pointerFrameQueueRef = React.useRef(new Map<number, Promise<void>>());
+  const pointerSlotFrameQueueRef = React.useRef(new Map<number, Promise<void>>());
+  const pointerGestureGenerationRef = React.useRef(new Map<number, number>());
+  const pointerQueueGenerationRef = React.useRef(0);
+  const pinchGestureRef = React.useRef<PinchGesture | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
   const useDesignApiFallback = shouldUseDesignApiFallback(client);
@@ -267,6 +290,13 @@ export function DroidWebscrApp({
         return;
       }
       const pipeline = videoPipelineRef.current;
+      pointerQueueGenerationRef.current += 1;
+      activePointerSlotsRef.current.clear();
+      pointerPositionsRef.current.clear();
+      pointerFrameQueueRef.current.clear();
+      pointerSlotFrameQueueRef.current.clear();
+      pointerGestureGenerationRef.current.clear();
+      pinchGestureRef.current = undefined;
       sessionSocketRef.current = undefined;
       videoPipelineRef.current = undefined;
       if (options.closeSocket) {
@@ -588,29 +618,307 @@ export function DroidWebscrApp({
     (event: React.PointerEvent<HTMLCanvasElement>, action: PointerAction) => {
       const size = videoSnapshot?.videoSize ?? { height: 1280, width: 720 };
       const rect = event.currentTarget.getBoundingClientRect();
-      const frame = mapPointerToControlFrame({
-        action,
-        buttons: event.buttons,
-        display: { height: size.height, rotation: normalizeRotation(rotation), width: size.width },
-        pointerId: pointerIdRef.current,
-        pressure: event.pressure || 1,
-        sequence: nextSequence(sequenceRef),
-        viewport: { height: rect.height, left: rect.left, top: rect.top, width: rect.width },
-        x: event.clientX,
-        y: event.clientY,
-      });
-      if (action === "up" || action === "cancel") {
-        pointerIdRef.current = (pointerIdRef.current + 1) % 10;
+      const socket = sessionSocketRef.current;
+      const queueGeneration = pointerQueueGenerationRef.current;
+      if (action === "down") {
+        pointerGestureGenerationRef.current.set(
+          event.pointerId,
+          (pointerGestureGenerationRef.current.get(event.pointerId) ?? 0) + 1,
+        );
       }
-      void sendControlFrame(frame);
+      const pointerGestureGeneration = pointerGestureGenerationRef.current.get(event.pointerId);
+      const clearPointerGestureState = () => {
+        for (const pointerId of activePointerSlotsRef.current.keys()) {
+          pointerGestureGenerationRef.current.set(
+            pointerId,
+            (pointerGestureGenerationRef.current.get(pointerId) ?? 0) + 1,
+          );
+        }
+        activePointerSlotsRef.current.clear();
+        pointerPositionsRef.current.clear();
+        pinchGestureRef.current = undefined;
+      };
+      const sendPointerFrame = (
+        frameAction: PointerAction,
+        pointerSlot: number,
+        x: number,
+        y: number,
+        buttons: number,
+        pressure: number,
+        queueKey?: number,
+        delayMs = 0,
+      ) => {
+        const frame = mapPointerToControlFrame({
+          action: frameAction,
+          buttons,
+          display: {
+            height: size.height,
+            rotation: normalizeRotation(rotation),
+            width: size.width,
+          },
+          pointerId: pointerSlot,
+          pressure,
+          sequence: nextSequence(sequenceRef),
+          viewport: { height: rect.height, left: rect.left, top: rect.top, width: rect.width },
+          x,
+          y,
+        });
+        const sendIfCurrent = async () => {
+          const stalePointerGesture =
+            queueKey !== undefined &&
+            pointerGestureGenerationRef.current.get(queueKey) !== pointerGestureGeneration;
+          if (stalePointerGesture && frameAction !== "up" && frameAction !== "cancel") {
+            return;
+          }
+          if (
+            sessionSocketRef.current !== socket ||
+            pointerQueueGenerationRef.current !== queueGeneration
+          ) {
+            return;
+          }
+          await socket?.send(frame);
+        };
+        if (frameAction === "cancel") {
+          void sendIfCurrent();
+          pointerQueueGenerationRef.current += 1;
+          pointerFrameQueueRef.current.clear();
+          pointerSlotFrameQueueRef.current.clear();
+          return;
+        }
+        if (queueKey === undefined) {
+          if (delayMs === 0 && !pointerSlotFrameQueueRef.current.has(pointerSlot)) {
+            void sendIfCurrent();
+            return;
+          }
+          enqueuePointerFrame(
+            pointerSlotFrameQueueRef.current,
+            pointerSlot,
+            sendIfCurrent,
+            delayMs,
+          );
+          return;
+        }
+        const previousPointerFrame = pointerFrameQueueRef.current.get(queueKey);
+        const sendAfterPointerFrame = async () => {
+          await previousPointerFrame?.catch(() => undefined);
+          await sendIfCurrent();
+        };
+        const queuedSlotFrame = enqueuePointerFrame(
+          pointerSlotFrameQueueRef.current,
+          pointerSlot,
+          sendAfterPointerFrame,
+          delayMs,
+        );
+        trackPointerQueue(pointerFrameQueueRef.current, queueKey, queuedSlotFrame);
+      };
+
+      const pinchGesture = pinchGestureRef.current;
+      if (pinchGesture?.browserPointerId === event.pointerId) {
+        event.preventDefault();
+        const [primary, secondary] = createSyntheticPinchPoints(pinchGesture, event);
+        if (action === "up" || action === "cancel") {
+          if (action === "cancel") {
+            sendPointerFrame(
+              "cancel",
+              pinchGesture.primarySlot,
+              primary.x,
+              primary.y,
+              0,
+              0,
+              pinchGesture.queueKey,
+            );
+            clearPointerGestureState();
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+            return;
+          }
+          sendPointerFrame(
+            action,
+            pinchGesture.secondarySlot,
+            secondary.x,
+            secondary.y,
+            0,
+            0,
+            pinchGesture.queueKey,
+          );
+          sendPointerFrame(
+            action,
+            pinchGesture.primarySlot,
+            primary.x,
+            primary.y,
+            0,
+            0,
+            pinchGesture.queueKey,
+          );
+          activePointerSlotsRef.current.delete(event.pointerId);
+          activePointerSlotsRef.current.delete(syntheticPinchPointerId(event.pointerId));
+          pinchGestureRef.current = undefined;
+          event.currentTarget.releasePointerCapture?.(event.pointerId);
+          return;
+        }
+        sendPointerFrame(
+          "move",
+          pinchGesture.primarySlot,
+          primary.x,
+          primary.y,
+          0,
+          event.pressure || 1,
+          pinchGesture.queueKey,
+        );
+        sendPointerFrame(
+          "move",
+          pinchGesture.secondarySlot,
+          secondary.x,
+          secondary.y,
+          0,
+          event.pressure || 1,
+          pinchGesture.queueKey,
+        );
+        return;
+      }
+
+      if (action === "down" && isPinchModifierPressed(event)) {
+        const secondaryBrowserPointerId = syntheticPinchPointerId(event.pointerId);
+        const primarySlot = resolvePointerSlot(
+          activePointerSlotsRef.current,
+          event.pointerId,
+          action,
+        );
+        const secondarySlot = resolvePointerSlot(
+          activePointerSlotsRef.current,
+          secondaryBrowserPointerId,
+          action,
+        );
+        if (primarySlot === undefined || secondarySlot === undefined) {
+          return;
+        }
+        event.preventDefault();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        const pendingPinchQueue =
+          pointerFrameQueueRef.current.has(event.pointerId) ||
+          pointerSlotFrameQueueRef.current.has(primarySlot) ||
+          pointerSlotFrameQueueRef.current.has(secondarySlot);
+        const nextPinchGesture = {
+          browserPointerId: event.pointerId,
+          centerX: event.clientX,
+          centerY: event.clientY,
+          primarySlot,
+          queueKey: pendingPinchQueue ? event.pointerId : undefined,
+          secondarySlot,
+        };
+        pinchGestureRef.current = nextPinchGesture;
+        const [primary, secondary] = createSyntheticPinchPoints(nextPinchGesture, event);
+        sendPointerFrame(
+          "down",
+          primarySlot,
+          primary.x,
+          primary.y,
+          0,
+          event.pressure || 1,
+          nextPinchGesture.queueKey,
+        );
+        sendPointerFrame(
+          "down",
+          secondarySlot,
+          secondary.x,
+          secondary.y,
+          0,
+          event.pressure || 1,
+          nextPinchGesture.queueKey,
+        );
+        return;
+      }
+
+      const pointerSlot = resolvePointerSlot(
+        activePointerSlotsRef.current,
+        event.pointerId,
+        action,
+      );
+      if (pointerSlot === undefined) {
+        return;
+      }
+      event.preventDefault();
+      if (action === "down") {
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+      }
+      const currentPoint = { x: event.clientX, y: event.clientY };
+      if (action === "move") {
+        const previousPoint = pointerPositionsRef.current.get(event.pointerId);
+        for (const [index, point] of interpolatePointerDrag(
+          previousPoint,
+          currentPoint,
+        ).entries()) {
+          sendPointerFrame(
+            "move",
+            pointerSlot,
+            point.x,
+            point.y,
+            event.buttons || 1,
+            event.pressure || 1,
+            event.pointerId,
+            index === 0 ? 0 : pointerDragFrameIntervalMs,
+          );
+        }
+        pointerPositionsRef.current.set(event.pointerId, currentPoint);
+        return;
+      }
+      if (action === "up") {
+        const previousPoint = pointerPositionsRef.current.get(event.pointerId);
+        for (const [index, point] of interpolatePointerDrag(
+          previousPoint,
+          currentPoint,
+        ).entries()) {
+          sendPointerFrame(
+            "move",
+            pointerSlot,
+            point.x,
+            point.y,
+            event.buttons || 1,
+            1,
+            event.pointerId,
+            index === 0 ? 0 : pointerDragFrameIntervalMs,
+          );
+        }
+      }
+      sendPointerFrame(
+        action,
+        pointerSlot,
+        currentPoint.x,
+        currentPoint.y,
+        action === "up" || action === "cancel" ? 0 : event.buttons || 1,
+        action === "up" || action === "cancel" ? 0 : event.pressure || 1,
+        (action === "down" && pointerFrameQueueRef.current.has(event.pointerId)) ||
+          action === "up" ||
+          action === "cancel"
+          ? event.pointerId
+          : undefined,
+      );
+      if (action === "down") {
+        pointerPositionsRef.current.set(event.pointerId, currentPoint);
+      }
+      if (action === "up" || action === "cancel") {
+        if (action === "cancel") {
+          clearPointerGestureState();
+        } else {
+          activePointerSlotsRef.current.delete(event.pointerId);
+          pointerPositionsRef.current.delete(event.pointerId);
+        }
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+      }
     },
-    [rotation, sendControlFrame, videoSnapshot?.videoSize],
+    [rotation, videoSnapshot?.videoSize],
   );
 
   React.useEffect(
     () => () => {
       const socket = sessionSocketRef.current;
       const pipeline = videoPipelineRef.current;
+      pointerQueueGenerationRef.current += 1;
+      activePointerSlotsRef.current.clear();
+      pointerPositionsRef.current.clear();
+      pointerFrameQueueRef.current.clear();
+      pointerSlotFrameQueueRef.current.clear();
+      pointerGestureGenerationRef.current.clear();
+      pinchGestureRef.current = undefined;
       sessionSocketRef.current = undefined;
       videoPipelineRef.current = undefined;
       socket?.close();
@@ -708,7 +1016,7 @@ export function DroidWebscrApp({
               onPointerCancel={(event) => sendPointer(event, "cancel")}
               onPointerDown={(event) => sendPointer(event, "down")}
               onPointerMove={(event) => {
-                if (event.buttons !== 0) {
+                if (activePointerSlotsRef.current.has(event.pointerId)) {
                   sendPointer(event, "move");
                 }
               }}
@@ -1328,6 +1636,117 @@ function clearCanvas(canvas: HTMLCanvasElement | null): void {
   }
   const width = canvas.width;
   canvas.width = width;
+}
+
+function resolvePointerSlot(
+  activePointers: Map<number, number>,
+  browserPointerId: number,
+  action: PointerAction,
+): number | undefined {
+  const existingSlot = activePointers.get(browserPointerId);
+  if (existingSlot !== undefined) {
+    return existingSlot;
+  }
+  if (action !== "down") {
+    return undefined;
+  }
+  for (let slot = 0; slot < 10; slot += 1) {
+    if (![...activePointers.values()].includes(slot)) {
+      activePointers.set(browserPointerId, slot);
+      return slot;
+    }
+  }
+  return undefined;
+}
+
+function isPinchModifierPressed(event: React.PointerEvent<HTMLElement>): boolean {
+  return event.ctrlKey || event.metaKey;
+}
+
+function syntheticPinchPointerId(browserPointerId: number): number {
+  return -browserPointerId - 1;
+}
+
+function interpolatePointerDrag(
+  previous: ClientPoint | undefined,
+  current: ClientPoint,
+): readonly ClientPoint[] {
+  if (!previous) {
+    return [current];
+  }
+  const distance = Math.hypot(current.x - previous.x, current.y - previous.y);
+  if (distance < 0.5) {
+    return [];
+  }
+  const steps = Math.max(1, Math.ceil(distance / pointerDragInterpolationStepPx));
+  return Array.from({ length: steps }, (_, index) => {
+    const progress = (index + 1) / steps;
+    return {
+      x: previous.x + (current.x - previous.x) * progress,
+      y: previous.y + (current.y - previous.y) * progress,
+    };
+  });
+}
+
+function enqueuePointerFrame(
+  queues: Map<number, Promise<void>>,
+  pointerId: number,
+  send: () => Promise<void>,
+  delayMs: number,
+): Promise<void> {
+  const previous = queues.get(pointerId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => delay(delayMs))
+    .then(send)
+    .finally(() => {
+      if (queues.get(pointerId) === next) {
+        queues.delete(pointerId);
+      }
+    });
+  queues.set(pointerId, next);
+  return next;
+}
+
+function trackPointerQueue(
+  queues: Map<number, Promise<void>>,
+  pointerId: number,
+  frame: Promise<void>,
+): void {
+  const previous = queues.get(pointerId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(() => frame)
+    .finally(() => {
+      if (queues.get(pointerId) === next) {
+        queues.delete(pointerId);
+      }
+    });
+  queues.set(pointerId, next);
+}
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function createSyntheticPinchPoints(
+  gesture: PinchGesture,
+  pointer: { readonly clientX: number; readonly clientY: number },
+): readonly [
+  { readonly x: number; readonly y: number },
+  { readonly x: number; readonly y: number },
+] {
+  const deltaX = pointer.clientX - gesture.centerX;
+  const deltaY = pointer.clientY - gesture.centerY;
+  const distance = Math.hypot(deltaX, deltaY);
+  const vector = distance < 1 ? { x: 0, y: -syntheticPinchRadiusPx } : { x: deltaX, y: deltaY };
+  return [
+    { x: gesture.centerX + vector.x, y: gesture.centerY + vector.y },
+    { x: gesture.centerX - vector.x, y: gesture.centerY - vector.y },
+  ];
 }
 
 function DisconnectedPhonePlaceholder({

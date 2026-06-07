@@ -87,16 +87,23 @@ class ProductVerificationServer(
         try {
             videoStream.start()
             require(videoStream.awaitFirstFrame()) { "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout." }
+            val inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height))
             val dispatcher = ControlFrameDispatcher(
                 bounds = InputDisplayBounds(config.width, config.height),
                 inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
-                inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height)),
+                inputInjector = inputInjector,
                 reconfigureVideo = { nextConfig ->
                     encoder.reconfigure(nextConfig)
                     videoStream.updateConfig(nextConfig)
                 },
             )
-            readAndDispatchControls(input, frameWriter, dispatcher)
+            try {
+                readAndDispatchControls(input, frameWriter, dispatcher)
+            } finally {
+                if (inputInjector is Closeable) {
+                    inputInjector.close()
+                }
+            }
         } finally {
             videoStream.stop()
             captureSession.stop()

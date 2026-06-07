@@ -1265,6 +1265,42 @@ describe("DroidWebscrApp", () => {
     ).toBeDisabled();
   });
 
+  it("closes the selected device menu when clicking outside the popup", async () => {
+    const user = userEvent.setup();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async (serial) => ({
+            sessionId: `s-${serial}`,
+            serial,
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+    await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
+    const menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Show device log" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Android screen viewport"));
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("uses browser localStorage when no storage override is provided", async () => {
     render(
       <DroidWebscrApp

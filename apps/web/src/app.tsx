@@ -957,6 +957,28 @@ function Sidebar({
   readonly selectedSerial: string | undefined;
 }): React.ReactElement {
   const [openSerial, setOpenSerial] = React.useState<string | undefined>();
+  const openDeviceMenuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const openDeviceMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!openSerial) {
+      return undefined;
+    }
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (openDeviceMenuRef.current?.contains(target) ||
+          openDeviceMenuButtonRef.current?.contains(target))
+      ) {
+        return;
+      }
+      setOpenSerial(undefined);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
+  }, [openSerial]);
+
   return (
     <aside aria-label="Device and access controls" className="sidebar">
       <div className="sidebar-section">
@@ -972,7 +994,11 @@ function Sidebar({
           ) : (
             devices.map((device) => (
               <div
-                className={cn("device-card", selectedSerial === device.serial && "selected")}
+                className={cn(
+                  "device-card",
+                  selectedSerial === device.serial && "selected",
+                  openSerial === device.serial && "menu-open",
+                )}
                 key={device.serial}
               >
                 <div className="device-card-main">
@@ -1000,13 +1026,27 @@ function Sidebar({
                         current === device.serial ? undefined : device.serial,
                       );
                     }}
+                    ref={(element) => {
+                      if (openSerial === device.serial) {
+                        openDeviceMenuButtonRef.current = element;
+                      }
+                    }}
                     size="icon"
                     variant="ghost"
                   >
                     <MoreVertical aria-hidden="true" />
                   </Button>
                 </div>
-                <div className="device-menu" hidden={openSerial !== device.serial} role="menu">
+                <div
+                  className="device-menu"
+                  hidden={openSerial !== device.serial}
+                  ref={(element) => {
+                    if (openSerial === device.serial) {
+                      openDeviceMenuRef.current = element;
+                    }
+                  }}
+                  role="menu"
+                >
                   <button
                     disabled={sessionActive}
                     onClick={() => {

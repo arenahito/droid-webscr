@@ -335,12 +335,16 @@ input {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-panel);
-  overflow: hidden;
+  overflow: visible;
   position: relative;
 }
 
 .device-card.selected {
   border-color: var(--color-primary);
+}
+
+.device-card.menu-open {
+  z-index: 10;
 }
 
 .device-card-main {

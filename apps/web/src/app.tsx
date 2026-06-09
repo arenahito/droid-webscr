@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   ArrowLeft,
-  Camera,
   Check,
   Clipboard,
   Home,
@@ -18,7 +17,6 @@ import {
   Smartphone,
   Square,
   Sun,
-  Video,
   Volume1,
   Volume2,
   Wifi,
@@ -74,14 +72,7 @@ export interface DroidWebscrAppProps {
 }
 
 type LogLevel = "all" | "info" | "warn" | "error";
-type DialogKind =
-  | "adb-scan"
-  | "endpoint"
-  | "rename"
-  | "bind"
-  | "power"
-  | "session-actions"
-  | undefined;
+type DialogKind = "adb-scan" | "endpoint" | "bind" | "power" | undefined;
 
 interface PinchGesture {
   readonly browserPointerId: number;
@@ -127,24 +118,31 @@ const designInitialLogs: readonly string[] = [
   "10:42:12.773 INFO   clipboard  Clipboard sync disabled",
   "10:42:14.092 INFO   session    Agent ready",
 ];
+const agentEndpointStorageKey = "droid-webscr.agentEndpoint";
 
 export function DroidWebscrApp({
   client,
   initialLogs = designInitialLogs,
-  sessionSocketFactory = createDefaultSessionSocket,
+  sessionSocketFactory,
   videoPipelineFactory = createDefaultVideoPipeline,
   storage = browserStorage(),
 }: DroidWebscrAppProps): React.ReactElement {
-  const agentClient = React.useMemo(() => client ?? createHttpAgentClient(), [client]);
+  const [agentBaseUrl, setAgentBaseUrl] = React.useState(
+    () => storage.getItem(agentEndpointStorageKey) ?? "",
+  );
+  const agentClient = React.useMemo(
+    () => client ?? createHttpAgentClient({ baseUrl: agentBaseUrl }),
+    [agentBaseUrl, client],
+  );
   const [devices, setDevices] = React.useState<readonly DeviceDescriptor[]>([]);
   const [loadingDevices, setLoadingDevices] = React.useState(true);
   const [runtimeConfig, setRuntimeConfig] = React.useState<RuntimeConfig>(fallbackRuntimeConfig);
   const [theme, setTheme] = React.useState<ThemePreference>(() => readTheme(storage));
   const [videoSnapshot, setVideoSnapshot] = React.useState<VideoPipelineSnapshot | undefined>();
+  const [controlReady, setControlReadyState] = React.useState(false);
   const [bitrateMbps, setBitrateMbps] = React.useState(4);
   const [fps, setFps] = React.useState(30);
   const [rotation, setRotation] = React.useState(0);
-  const [recording, setRecording] = React.useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [dialog, setDialog] = React.useState<DialogKind>();
   const [dialogValue, setDialogValue] = React.useState("");
@@ -155,7 +153,6 @@ export function DroidWebscrApp({
   );
   const [selectedAdbSerial, setSelectedAdbSerial] = React.useState<string | undefined>();
   const [adbDialogDevices, setAdbDialogDevices] = React.useState<readonly DeviceDescriptor[]>([]);
-  const [dialogDeviceSerial, setDialogDeviceSerial] = React.useState<string | undefined>();
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
@@ -168,6 +165,7 @@ export function DroidWebscrApp({
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const textInputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const sessionSocketRef = React.useRef<SessionSocket | undefined>(undefined);
+  const controlReadyRef = React.useRef(false);
   const videoPipelineRef = React.useRef<VideoPipeline | undefined>(undefined);
   const activePointerSlotsRef = React.useRef(new Map<number, number>());
   const pointerPositionsRef = React.useRef(new Map<number, ClientPoint>());
@@ -178,12 +176,17 @@ export function DroidWebscrApp({
   const pinchGestureRef = React.useRef<PinchGesture | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
-  const useDesignApiFallback = shouldUseDesignApiFallback(client);
+  const useDesignApiFallback = shouldUseDesignApiFallback(client) && !agentBaseUrl;
   const [viewportRef, viewportSize] = useElementSize<HTMLElement>();
   const appStyle = React.useMemo(
     () => ({ "--log-height": `${logHeight}px` }) as React.CSSProperties,
     [logHeight],
   );
+
+  const setControlReady = React.useCallback((ready: boolean) => {
+    controlReadyRef.current = ready;
+    setControlReadyState(ready);
+  }, []);
 
   React.useEffect(() => {
     applyTheme(theme);
@@ -258,26 +261,23 @@ export function DroidWebscrApp({
           setRuntimeConfig(config);
           setBindHostDraft(config.bindHost);
           setBindPortDraft(String(config.port));
-          setShareUrl(createShareUrl(config.bindHost, config.port));
+          setShareUrl(createShareUrl(config.bindHost, config.port, agentBaseUrl));
+          persistAgentBaseUrl(
+            createAgentEndpointUrl(config.bindHost, config.port, agentBaseUrl),
+            setAgentBaseUrl,
+            storage,
+          );
         })
         .catch(() => undefined);
-      void agentClient
-        .shareUrl?.()
-        .then((result) => setShareUrl(result.url))
-        .catch(() => undefined);
     }
-  }, [agentClient, refreshDevices, useDesignApiFallback]);
+  }, [agentBaseUrl, agentClient, refreshDevices, storage, useDesignApiFallback]);
 
   const openBindDialog = React.useCallback(() => {
     setBindHostDraft(runtimeConfig.bindHost);
     setBindPortDraft(String(runtimeConfig.port));
-    setShareUrl(createShareUrl(runtimeConfig.bindHost, runtimeConfig.port));
-    void agentClient
-      .shareUrl?.()
-      .then((result) => setShareUrl(result.url))
-      .catch(() => undefined);
+    setShareUrl(createShareUrl(runtimeConfig.bindHost, runtimeConfig.port, agentBaseUrl));
     setDialog("bind");
-  }, [agentClient, runtimeConfig]);
+  }, [agentBaseUrl, runtimeConfig]);
 
   const finishSession = React.useCallback(
     (options: {
@@ -297,6 +297,7 @@ export function DroidWebscrApp({
       pointerGestureGenerationRef.current.clear();
       pinchGestureRef.current = undefined;
       sessionSocketRef.current = undefined;
+      setControlReady(false);
       videoPipelineRef.current = undefined;
       if (options.closeSocket) {
         socket?.close();
@@ -304,10 +305,15 @@ export function DroidWebscrApp({
       pipeline?.close();
       clearCanvas(canvasRef.current);
       setVideoSnapshot(undefined);
-      setRecording(false);
       dispatch({ type: "stop" });
     },
-    [],
+    [setControlReady],
+  );
+
+  const createSessionSocketForRuntime = React.useCallback(
+    (session: SessionRecord) =>
+      sessionSocketFactory?.(session) ?? createDefaultSessionSocket(session, agentBaseUrl),
+    [agentBaseUrl, sessionSocketFactory],
   );
 
   const startSessionForSerial = React.useCallback(
@@ -315,12 +321,12 @@ export function DroidWebscrApp({
       if (!serial || state.phase === "starting" || state.session) {
         return;
       }
+      setControlReady(false);
       dispatch({ serial, type: "select-device" });
       dispatch({ type: "start-requested" });
       try {
         const session = await agentClient.createSession(serial, { bitrateMbps, fps });
-        dispatch({ session, type: "start-succeeded" });
-        const socket = sessionSocketFactory(session);
+        const socket = createSessionSocketForRuntime(session);
         sessionSocketRef.current = socket;
         socket.onClose(() => {
           finishSession({ closeSocket: false, expectedSocket: socket });
@@ -357,7 +363,13 @@ export function DroidWebscrApp({
         }
         await socket.waitUntilOpen();
         await socket.send(createSessionHelloFrame(nextSequence(sequenceRef)));
+        if (sessionSocketRef.current !== socket) {
+          return;
+        }
+        setControlReady(true);
+        dispatch({ session, type: "start-succeeded" });
       } catch (error) {
+        finishSession({ closeSocket: true });
         dispatch({
           message: error instanceof Error ? error.message : "Session creation failed",
           type: "failed",
@@ -368,8 +380,9 @@ export function DroidWebscrApp({
       agentClient,
       finishSession,
       bitrateMbps,
+      createSessionSocketForRuntime,
       fps,
-      sessionSocketFactory,
+      setControlReady,
       state.phase,
       state.session,
       videoPipelineFactory,
@@ -386,6 +399,9 @@ export function DroidWebscrApp({
   }, [finishSession]);
 
   const sendControlFrame = React.useCallback(async (frame: Uint8Array) => {
+    if (!controlReadyRef.current) {
+      return;
+    }
     await sessionSocketRef.current?.send(frame);
   }, []);
 
@@ -450,27 +466,6 @@ export function DroidWebscrApp({
     [sendControlFrame],
   );
 
-  const captureFrame = React.useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-    const url = canvas.toDataURL("image/png");
-    const link = document.createElement("a");
-    link.download = "droid-webscr-capture.png";
-    link.href = url;
-    link.click();
-    notify("Capture saved");
-  }, [notify]);
-
-  const toggleRecording = React.useCallback(() => {
-    setRecording((current) => !current);
-    dispatch({
-      message: recording ? "INFO Recording stopped" : "INFO Recording started",
-      type: "log",
-    });
-  }, [recording]);
-
   const scanDevices = React.useCallback(async (): Promise<
     readonly DeviceDescriptor[] | undefined
   > => {
@@ -493,7 +488,7 @@ export function DroidWebscrApp({
 
   const submitDialog = React.useCallback(async () => {
     const value = dialogValue.trim();
-    if ((dialog === "endpoint" || dialog === "rename") && !value) {
+    if (dialog === "endpoint" && !value) {
       return;
     }
     try {
@@ -501,17 +496,6 @@ export function DroidWebscrApp({
         await agentClient.connectEndpoint?.(value);
         notify("Endpoint connected");
         await scanDevices();
-      }
-      const dialogDevice =
-        devices.find((device) => device.serial === dialogDeviceSerial) ?? selectedDevice;
-      if (dialog === "rename" && dialogDevice) {
-        await agentClient.renameDevice?.(dialogDevice.serial, value);
-        setDevices((current) =>
-          current.map((device) =>
-            device.serial === dialogDevice.serial ? { ...device, model: value } : device,
-          ),
-        );
-        notify("Device renamed");
       }
       if (dialog === "bind") {
         const bindHost = bindHostDraft.trim();
@@ -525,19 +509,18 @@ export function DroidWebscrApp({
           clipboardEnabled: result?.clipboardEnabled ?? current.clipboardEnabled,
           port: result?.port ?? port,
         }));
-        setShareUrl(result?.shareUrl ?? createShareUrl(host, port));
+        const nextAgentBaseUrl = createAgentEndpointUrl(host, port, agentBaseUrl);
+        const nextShareUrl = createShareUrl(host, port, nextAgentBaseUrl);
+        setShareUrl(nextShareUrl);
+        persistAgentBaseUrl(nextAgentBaseUrl, setAgentBaseUrl, storage);
         dispatch({
-          message:
-            result?.message ?? `WARN Agent bind address set to ${host}:${port}; restart required`,
+          message: result?.message ?? `INFO Agent is now listening on ${host}:${port}.`,
           type: "log",
         });
-        notify(result?.ok ? "Bind updated" : "Bind saved locally");
+        notify(result?.ok ? "Bind applied" : "Bind update queued");
       }
       if (dialog === "power") {
         sendSystemAction("power");
-      }
-      if (dialog === "session-actions") {
-        notify("Session actions saved");
       }
       if (dialog === "adb-scan" && selectedAdbSerial) {
         const selectedScannedDevice = adbDialogDevices.find(
@@ -551,7 +534,6 @@ export function DroidWebscrApp({
       setDialog(undefined);
       setAdbDialogDevices([]);
       setDialogValue("");
-      setDialogDeviceSerial(undefined);
       setSelectedAdbSerial(undefined);
     } catch (error) {
       dispatch({
@@ -560,20 +542,19 @@ export function DroidWebscrApp({
       });
     }
   }, [
+    agentBaseUrl,
     agentClient,
     adbDialogDevices,
     bindHostDraft,
     bindPortDraft,
-    devices,
     dialog,
-    dialogDeviceSerial,
     dialogValue,
     notify,
     runtimeConfig,
     scanDevices,
     selectedAdbSerial,
-    selectedDevice,
     sendSystemAction,
+    storage,
   ]);
 
   const sendKey = React.useCallback(
@@ -921,12 +902,13 @@ export function DroidWebscrApp({
       pointerGestureGenerationRef.current.clear();
       pinchGestureRef.current = undefined;
       sessionSocketRef.current = undefined;
+      setControlReady(false);
       videoPipelineRef.current = undefined;
       socket?.close();
       pipeline?.close();
       clearCanvas(canvasRef.current);
     },
-    [],
+    [setControlReady],
   );
 
   return (
@@ -940,16 +922,12 @@ export function DroidWebscrApp({
       <Topbar
         bitrateMbps={bitrateMbps}
         fps={fps}
-        onCapture={captureFrame}
         onReconfigure={sendVideoReconfigure}
-        onRecord={toggleRecording}
-        onSessionActions={() => setDialog("session-actions")}
         onStart={() => void startSession()}
         onStop={stopSession}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
         phase={state.phase}
-        recording={recording}
         selectedDevice={selectedDevice}
         session={state.session}
         sidebarCollapsed={sidebarCollapsed}
@@ -979,16 +957,25 @@ export function DroidWebscrApp({
                 setDialog("adb-scan");
               });
             }}
-            onRename={(device) => {
-              setDialogDeviceSerial(device.serial);
-              setDialog("rename");
-              setDialogValue(device.model ?? "");
-            }}
             onSelect={(serial) => dispatch({ serial, type: "select-device" })}
-            onShowDeviceLog={(device) => {
+            onShowDeviceLog={async (device) => {
               const label = device.model ?? device.serial;
-              dispatch({ message: `INFO Showing logs for ${label}`, type: "log" });
-              notify(`Showing logs for ${label}`);
+              try {
+                const result = await agentClient.getDeviceLogs?.(device.serial, 200);
+                if (!result) {
+                  dispatch({ message: `WARN Device logs unavailable for ${label}`, type: "log" });
+                  return;
+                }
+                for (const line of result.lines) {
+                  dispatch({ message: line, type: "log" });
+                }
+                notify(`Loaded logs for ${label}`);
+              } catch (error) {
+                dispatch({
+                  message: error instanceof Error ? error.message : "Device log fetch failed",
+                  type: "failed",
+                });
+              }
             }}
             onStartSession={(device) => void startSessionForSerial(device.serial)}
             sessionActive={Boolean(state.session) || state.phase === "starting"}
@@ -1027,6 +1014,7 @@ export function DroidWebscrApp({
               videoSnapshot={videoSnapshot}
             />
             <AndroidControls
+              sessionActive={controlReady}
               onRotate={(delta) => setRotation((current) => (current + delta + 360) % 360)}
               onSystemAction={requestSystemAction}
             />
@@ -1051,12 +1039,10 @@ export function DroidWebscrApp({
           kind={dialog}
           bindHost={bindHostDraft}
           bindPort={bindPortDraft}
-          clipboardEnabled={runtimeConfig.clipboardEnabled}
           devices={dialog === "adb-scan" ? adbDialogDevices : devices}
           onCancel={() => {
             setDialog(undefined);
             setAdbDialogDevices([]);
-            setDialogDeviceSerial(undefined);
             setSelectedAdbSerial(undefined);
           }}
           onCopyShareUrl={() => {
@@ -1082,11 +1068,11 @@ export function DroidWebscrApp({
           onSubmit={() => void submitDialog()}
           onBindHostChange={(value) => {
             setBindHostDraft(value);
-            setShareUrl(createShareUrl(value, Number(bindPortDraft)));
+            setShareUrl(createShareUrl(value, Number(bindPortDraft), agentBaseUrl));
           }}
           onBindPortChange={(value) => {
             setBindPortDraft(value);
-            setShareUrl(createShareUrl(bindHostDraft, Number(value)));
+            setShareUrl(createShareUrl(bindHostDraft, Number(value), agentBaseUrl));
           }}
           onValueChange={setDialogValue}
           selectedAdbSerial={selectedAdbSerial}
@@ -1102,16 +1088,12 @@ export function DroidWebscrApp({
 function Topbar({
   bitrateMbps,
   fps,
-  onCapture,
   onReconfigure,
-  onRecord,
-  onSessionActions,
   onStart,
   onStop,
   onToggleSidebar,
   onTheme,
   phase,
-  recording,
   selectedDevice,
   session,
   sidebarCollapsed,
@@ -1119,16 +1101,12 @@ function Topbar({
 }: {
   readonly bitrateMbps: number;
   readonly fps: number;
-  readonly onCapture: () => void;
   readonly onReconfigure: (bitrateMbps: number, fps: number) => void;
-  readonly onRecord: () => void;
-  readonly onSessionActions: () => void;
   readonly onStart: () => void;
   readonly onStop: () => void;
   readonly onToggleSidebar: () => void;
   readonly onTheme: () => void;
   readonly phase: SessionState["phase"];
-  readonly recording: boolean;
   readonly selectedDevice: DeviceDescriptor | undefined;
   readonly session: SessionRecord | undefined;
   readonly sidebarCollapsed: boolean;
@@ -1207,20 +1185,6 @@ function Topbar({
       >
         {theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
       </Button>
-      <Button aria-label="Capture" onClick={onCapture} size="icon" variant="outline">
-        <Camera aria-hidden="true" />
-      </Button>
-      <Button
-        aria-label={recording ? "Stop recording" : "Record"}
-        onClick={onRecord}
-        size="icon"
-        variant="outline"
-      >
-        <Video aria-hidden="true" />
-      </Button>
-      <Button aria-label="More actions" onClick={onSessionActions} size="icon" variant="ghost">
-        <MoreVertical aria-hidden="true" />
-      </Button>
     </header>
   );
 }
@@ -1232,7 +1196,6 @@ function Sidebar({
   onConnectEndpoint,
   onDisconnect,
   onOpenAdbScan,
-  onRename,
   onSelect,
   onShowDeviceLog,
   onStartSession,
@@ -1245,9 +1208,8 @@ function Sidebar({
   readonly onConnectEndpoint: () => void;
   readonly onDisconnect: (serial: string) => Promise<void>;
   readonly onOpenAdbScan: () => void;
-  readonly onRename: (device: DeviceDescriptor) => void;
   readonly onSelect: (serial: string) => void;
-  readonly onShowDeviceLog: (device: DeviceDescriptor) => void;
+  readonly onShowDeviceLog: (device: DeviceDescriptor) => Promise<void>;
   readonly onStartSession: (device: DeviceDescriptor) => void;
   readonly sessionActive: boolean;
   readonly selectedSerial: string | undefined;
@@ -1356,23 +1318,13 @@ function Sidebar({
                   </button>
                   <button
                     onClick={() => {
-                      onShowDeviceLog(device);
+                      void onShowDeviceLog(device);
                       setOpenSerial(undefined);
                     }}
                     role="menuitem"
                     type="button"
                   >
                     Show device log
-                  </button>
-                  <button
-                    onClick={() => {
-                      onRename(device);
-                      setOpenSerial(undefined);
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    Rename device
                   </button>
                   <button
                     className="danger"
@@ -1756,9 +1708,11 @@ function DisconnectedPhonePlaceholder({
 function AndroidControls({
   onRotate,
   onSystemAction,
+  sessionActive,
 }: {
   readonly onRotate: (delta: number) => void;
   readonly onSystemAction: (action: SystemControlAction) => void;
+  readonly sessionActive: boolean;
 }): React.ReactElement {
   const controls: ReadonlyArray<readonly [string, SystemControlAction, typeof Power, boolean?]> = [
     ["Power", "power", Power, true],
@@ -1774,6 +1728,7 @@ function AndroidControls({
         <Button
           aria-label={label}
           className={danger ? "danger" : undefined}
+          disabled={!sessionActive}
           key={label}
           onClick={() => onSystemAction(action)}
           size="icon"
@@ -1792,6 +1747,7 @@ function AndroidControls({
         <Button
           aria-label={label}
           className={danger ? "danger" : undefined}
+          disabled={!sessionActive}
           key={label}
           onClick={() => onSystemAction(action)}
           size="icon"
@@ -1903,7 +1859,6 @@ function LogLine({ value }: { readonly value: string }): React.ReactElement {
 function Dialog({
   bindHost,
   bindPort,
-  clipboardEnabled,
   devices,
   kind,
   onCancel,
@@ -1920,7 +1875,6 @@ function Dialog({
 }: {
   readonly bindHost: string;
   readonly bindPort: string;
-  readonly clipboardEnabled: boolean;
   readonly devices: readonly DeviceDescriptor[];
   readonly kind: Exclude<DialogKind, undefined>;
   readonly onCancel: () => void;
@@ -1938,15 +1892,11 @@ function Dialog({
   const title =
     kind === "endpoint"
       ? "Connect by endpoint"
-      : kind === "rename"
-        ? "Rename device"
-        : kind === "bind"
-          ? "Bind access"
-          : kind === "power"
-            ? "Power action"
-            : kind === "session-actions"
-              ? "Session actions"
-              : "Scan adb devices";
+      : kind === "bind"
+        ? "Bind access"
+        : kind === "power"
+          ? "Power action"
+          : "Scan adb devices";
   return (
     <div
       aria-label={title}
@@ -1992,20 +1942,18 @@ function Dialog({
               </label>
             </>
           ) : null}
-          {kind === "endpoint" || kind === "rename" ? (
+          {kind === "endpoint" ? (
             <>
               <label className="field">
-                {kind === "endpoint" ? "ADB endpoint" : "Display name"}
+                ADB endpoint
                 <input
                   autoFocus
                   onChange={(event) => onValueChange(event.target.value)}
-                  placeholder={kind === "endpoint" ? "192.168.1.40:5555" : "Value"}
+                  placeholder="192.168.1.40:5555"
                   value={value}
                 />
               </label>
-              {kind === "endpoint" ? (
-                <p>Use this when the device is not already visible in adb devices.</p>
-              ) : null}
+              <p>Use this when the device is not already visible in adb devices.</p>
             </>
           ) : null}
           {kind === "power" ? (
@@ -2013,15 +1961,6 @@ function Dialog({
               Send a power-key event to the selected Android device. This is a guarded system
               action.
             </p>
-          ) : null}
-          {kind === "session-actions" ? (
-            <label className="field">
-              Reconnect policy
-              <select aria-label="Reconnect policy" defaultValue="auto">
-                <option value="auto">Auto reconnect</option>
-                <option value="manual">Manual reconnect</option>
-              </select>
-            </label>
           ) : null}
           {kind === "adb-scan" ? (
             <>
@@ -2053,19 +1992,8 @@ function Dialog({
               </div>
             </>
           ) : null}
-          {!clipboardEnabled && kind === "session-actions" ? (
-            <p className="status-note">Clipboard sync is currently disabled.</p>
-          ) : null}
         </div>
         <div className="dialog-actions">
-          {kind === "session-actions" ? (
-            <>
-              <Button onClick={onCancel} variant="outline">
-                Close
-              </Button>
-              <Button onClick={onSubmit}>Apply</Button>
-            </>
-          ) : null}
           {kind === "power" ? (
             <>
               <Button onClick={onCancel} variant="outline">
@@ -2084,7 +2012,7 @@ function Dialog({
               <Button onClick={onCopyShareUrl} variant="outline">
                 Copy share URL
               </Button>
-              <Button onClick={onSubmit}>Save bind</Button>
+              <Button onClick={onSubmit}>Apply bind</Button>
             </>
           ) : null}
           {kind === "adb-scan" ? (
@@ -2100,12 +2028,12 @@ function Dialog({
               </Button>
             </>
           ) : null}
-          {kind === "endpoint" || kind === "rename" ? (
+          {kind === "endpoint" ? (
             <>
               <Button onClick={onCancel} variant="outline">
                 Cancel
               </Button>
-              <Button onClick={onSubmit}>{kind === "endpoint" ? "Connect" : "Save"}</Button>
+              <Button onClick={onSubmit}>Connect</Button>
             </>
           ) : null}
         </div>
@@ -2155,19 +2083,78 @@ function designFallbackDevices(): readonly DeviceDescriptor[] {
   ];
 }
 
-function createShareUrl(bindHost: string, port: number): string {
+function createShareUrl(bindHost: string, port: number, agentBaseUrl = ""): string {
   const nextPort = Number.isFinite(port) && port > 0 ? port : fallbackRuntimeConfig.port;
+  const endpointHost = parseUrlHost(agentBaseUrl) ?? currentBrowserHost();
   if (bindHost === "0.0.0.0" || bindHost === "::") {
-    return `http://127.0.0.1:${nextPort}`;
+    return `http://${formatHost(endpointHost)}:${nextPort}`;
   }
-  const host = bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
-  return `http://${host}:${nextPort}`;
+  return `http://${formatHost(bindHost)}:${nextPort}`;
 }
 
-function createDefaultSessionSocket(session: SessionRecord): SessionSocket {
+export function createAgentEndpointUrl(
+  bindHost: string,
+  port: number,
+  currentEndpoint = "",
+): string {
+  const nextPort = Number.isFinite(port) && port > 0 ? port : fallbackRuntimeConfig.port;
+  const currentHost = parseUrlHost(currentEndpoint) ?? currentBrowserHost();
+  const protocol =
+    typeof window !== "undefined" && window.location.protocol ? window.location.protocol : "http:";
+  const host = bindHost === "0.0.0.0" || bindHost === "::" ? currentHost : bindHost;
+  return `${protocol}//${formatHost(host)}:${nextPort}`;
+}
+
+function currentBrowserHost(): string {
+  return typeof window !== "undefined" && window.location.hostname
+    ? window.location.hostname
+    : fallbackRuntimeConfig.bindHost;
+}
+
+function formatHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function parseUrlHost(url: string): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistAgentBaseUrl(
+  url: string,
+  setAgentBaseUrl: (url: string) => void,
+  storage: StorageLike,
+): void {
+  setAgentBaseUrl(url);
+  if (url) {
+    storage.setItem(agentEndpointStorageKey, url);
+    return;
+  }
+  storage.removeItem(agentEndpointStorageKey);
+}
+
+function createDefaultSessionSocket(session: SessionRecord, agentBaseUrl: string): SessionSocket {
   return createSessionSocket(
-    `/ws/session/${encodeURIComponent(session.sessionId)}?token=${encodeURIComponent(session.token)}`,
+    createSessionSocketUrl(
+      `/ws/session/${encodeURIComponent(session.sessionId)}?token=${encodeURIComponent(session.token)}`,
+      agentBaseUrl,
+    ),
   );
+}
+
+export function createSessionSocketUrl(path: string, agentBaseUrl: string): string {
+  if (!agentBaseUrl) {
+    return path;
+  }
+  const url = new URL(path, agentBaseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
 }
 
 function createDefaultVideoPipeline(

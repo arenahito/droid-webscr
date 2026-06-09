@@ -137,6 +137,111 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("uses the runtime bind config for websocket host and origin checks", async () => {
+    const context = testContext({
+      authToken: "secret",
+      bindHost: "127.0.0.1",
+      clipboard: { enabled: false },
+      port: 7391,
+    });
+    const app = await createFastifyApp(context);
+    const headers = { authorization: "Bearer secret" };
+
+    await app.inject({
+      headers,
+      method: "PATCH",
+      payload: { bindHost: "192.168.1.20", port: 7400 },
+      url: "/api/config/bind",
+    });
+    const created = await app.inject({
+      headers,
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        authorization: "Bearer secret",
+        host: "192.168.1.20:7400",
+        origin: "http://192.168.1.20:7400",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    ws.terminate();
+
+    await app.close();
+  });
+
+  it("allows the local web UI origin to reach the current runtime host", async () => {
+    const context = testContext({
+      authToken: "secret",
+      bindHost: "127.0.0.1",
+      clipboard: { enabled: false },
+      port: 7391,
+    });
+    const app = await createFastifyApp(context);
+    const headers = { authorization: "Bearer secret" };
+    const response = await app.inject({
+      headers: {
+        ...headers,
+        host: "127.0.0.1:7391",
+        origin: "http://localhost:5173",
+      },
+      method: "GET",
+      url: "/api/devices",
+    });
+    const created = await app.inject({
+      headers,
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        authorization: "Bearer secret",
+        host: "127.0.0.1:7391",
+        origin: "http://localhost:5173",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    ws.terminate();
+
+    await app.close();
+  });
+
+  it("does not reflect arbitrary loopback origins in CORS", async () => {
+    const app = await createFastifyApp(testContext());
+
+    const response = await app.inject({
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://localhost:5174",
+      },
+      method: "GET",
+      url: "/api/devices",
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+    const sameHostDifferentPort = await app.inject({
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:5174",
+      },
+      method: "GET",
+      url: "/api/devices",
+    });
+    expect(sameHostDifferentPort.statusCode).toBe(403);
+    expect(sameHostDifferentPort.headers["access-control-allow-origin"]).toBeUndefined();
+    await app.close();
+  });
+
   it("lists devices through the ADB provider contract", async () => {
     const app = await createFastifyApp(testContext());
 
@@ -167,6 +272,7 @@ describe("agent server", () => {
     const adbProvider = context.adbProvider as typeof context.adbProvider & {
       connectEndpoint(endpoint: string): Promise<void>;
       disconnect(serial: string): Promise<void>;
+      readDeviceLogs(serial: string, lines: number): Promise<readonly string[]>;
     };
     adbProvider.connectEndpoint = async (endpoint) => {
       connectedEndpoints.push(endpoint);
@@ -174,6 +280,10 @@ describe("agent server", () => {
     adbProvider.disconnect = async (serial) => {
       disconnectedSerials.push(serial);
     };
+    adbProvider.readDeviceLogs = async (serial, lines) => [
+      `${serial} requested ${lines} lines`,
+      "06-09 13:40:01.000 I ActivityTaskManager: Displayed app",
+    ];
     const app = await createFastifyApp(context);
     const headers = { authorization: "Bearer secret" };
 
@@ -202,7 +312,7 @@ describe("agent server", () => {
     ).toEqual({
       bindHost: "192.168.1.20",
       clipboardEnabled: true,
-      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      message: "Agent is now listening on 192.168.1.20:7400.",
       ok: true,
       port: 7400,
       shareUrl: "http://192.168.1.20:7400",
@@ -250,19 +360,24 @@ describe("agent server", () => {
       (
         await app.inject({
           headers,
-          method: "POST",
-          payload: { alias: "Pixel Lab" },
-          url: "/api/devices/emulator-5554/rename",
+          method: "GET",
+          url: "/api/devices/emulator-5554/logs?lines=2",
         })
       ).json(),
-    ).toEqual({ message: "Device emulator-5554 renamed", ok: true });
+    ).toEqual({
+      lines: [
+        "emulator-5554 requested 2 lines",
+        "06-09 13:40:01.000 I ActivityTaskManager: Displayed app",
+      ],
+      ok: true,
+      serial: "emulator-5554",
+    });
     expect(
       (await app.inject({ headers, method: "POST", url: "/api/devices/scan" })).json(),
     ).toEqual({
       devices: [
         {
           authorizationState: "authorized",
-          model: "Pixel Lab",
           serial: "emulator-5554",
           transportKind: "emulator",
         },
@@ -330,6 +445,153 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("applies bind address changes on the current port", async () => {
+    const app = await createFastifyApp(
+      testContext({
+        authToken: "secret",
+        bindHost: "127.0.0.1",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+
+    const response = await app.inject({
+      headers: { authorization: "Bearer secret" },
+      method: "PATCH",
+      payload: { bindHost: "192.168.1.20", port: 7391 },
+      url: "/api/config/bind",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      bindHost: "192.168.1.20",
+      ok: true,
+      port: 7391,
+    });
+    expect(
+      (
+        await app.inject({
+          headers: { authorization: "Bearer secret" },
+          method: "GET",
+          url: "/api/config",
+        })
+      ).json(),
+    ).toEqual({
+      bindHost: "192.168.1.20",
+      clipboardEnabled: false,
+      port: 7391,
+    });
+    await app.close();
+  });
+
+  it("accepts IPv6 loopback hosts in runtime origin checks", async () => {
+    const app = await createFastifyApp(
+      testContext({
+        authToken: undefined,
+        bindHost: "::1",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+    const response = await app.inject({
+      headers: {
+        host: "[::1]:7391",
+        origin: "http://[::1]:7391",
+      },
+      method: "GET",
+      url: "/api/devices",
+    });
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          headers: {
+            host: "localhost:7391",
+            origin: "http://localhost:7391",
+          },
+          method: "GET",
+          url: "/api/devices",
+        })
+      ).statusCode,
+    ).toBe(200);
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        host: "[::1]:7391",
+        origin: "http://[::1]:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+    ws.terminate();
+    await app.close();
+  });
+
+  it("accepts loopback host aliases when bound to localhost", async () => {
+    const app = await createFastifyApp(
+      testContext({
+        authToken: undefined,
+        bindHost: "localhost",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+
+    expect(
+      (
+        await app.inject({
+          headers: {
+            host: "127.0.0.1:7391",
+            origin: "http://127.0.0.1:7391",
+          },
+          method: "GET",
+          url: "/api/devices",
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          headers: {
+            host: "[::1]:7391",
+            origin: "http://[::1]:7391",
+          },
+          method: "GET",
+          url: "/api/devices",
+        })
+      ).statusCode,
+    ).toBe(200);
+    await app.close();
+  });
+
+  it("accepts default-port same-origin hosts without explicit ports", async () => {
+    const app = await createFastifyApp(
+      testContext({
+        authToken: undefined,
+        bindHost: "localhost",
+        clipboard: { enabled: false },
+        port: 80,
+      }),
+    );
+
+    const response = await app.inject({
+      headers: {
+        host: "localhost",
+        origin: "http://localhost",
+      },
+      method: "GET",
+      url: "/api/devices",
+    });
+
+    expect(response.statusCode).toBe(200);
+    await app.close();
+  });
+
   it("rejects invalid runtime clipboard updates", async () => {
     const app = await createFastifyApp(testContext());
 
@@ -353,9 +615,8 @@ describe("agent server", () => {
     expect(
       (
         await app.inject({
-          method: "POST",
-          payload: {},
-          url: "/api/devices/emulator-5554/rename",
+          method: "GET",
+          url: "/api/devices/emulator-5554/logs?lines=0",
         })
       ).statusCode,
     ).toBe(400);
@@ -568,6 +829,49 @@ describe("agent server", () => {
     expect(writes.map((item) => Array.from(item))).toEqual([Array.from(frame)]);
     ws.terminate();
     await app.close();
+  });
+
+  it("stops a device session that resolves after the browser socket already closed", async () => {
+    let releaseStart: (() => void) | undefined;
+    const stopped: string[] = [];
+    const context = testContext();
+    const app = await createFastifyApp({
+      ...context,
+      deviceServer: {
+        async start(serial) {
+          await new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          });
+          return {
+            frames: (async function* (): AsyncIterable<Uint8Array> {})(),
+            serial,
+            stop: async () => {
+              stopped.push(serial);
+            },
+            write: async () => {},
+          };
+        },
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      payload: { serial: "emulator-5554" },
+      url: "/api/sessions",
+    });
+    const session = created.json();
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+        "sec-websocket-protocol": binaryWebSocketProtocol,
+      },
+    });
+
+    ws.terminate();
+    releaseStart?.();
+    await app.close();
+
+    expect(stopped).toEqual(["emulator-5554"]);
   });
 
   it("keeps the websocket open while waiting for device frames after startup", async () => {

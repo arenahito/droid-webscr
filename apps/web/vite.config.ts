@@ -8,6 +8,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   server: {
+    strictPort: true,
     proxy: {
       "/api": "http://127.0.0.1:7391",
       "/ws": {

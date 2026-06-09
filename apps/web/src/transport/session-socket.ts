@@ -31,14 +31,22 @@ export class SessionSocket {
   public constructor(private readonly socket: BinarySocket) {}
 
   public waitUntilOpen(): Promise<void> {
+    const validateProtocol = () => {
+      if (this.socket.protocol !== binaryWebSocketProtocol) {
+        throw new Error(
+          `Unsupported WebSocket protocol negotiated: ${this.socket.protocol || "<none>"}`,
+        );
+      }
+    };
+    if (this.socket.readyState === 1) {
+      return Promise.resolve().then(validateProtocol);
+    }
     return new Promise((resolve, reject) => {
       this.socket.addEventListener("open", () => {
-        if (this.socket.protocol !== binaryWebSocketProtocol) {
-          reject(
-            new Error(
-              `Unsupported WebSocket protocol negotiated: ${this.socket.protocol || "<none>"}`,
-            ),
-          );
+        try {
+          validateProtocol();
+        } catch (error) {
+          reject(error);
           return;
         }
         resolve();

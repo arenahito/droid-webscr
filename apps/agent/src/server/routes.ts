@@ -9,16 +9,19 @@ export interface RouteContext {
   readonly adbProvider: AdbProvider;
   readonly config: AgentConfig;
   readonly deviceServer: DeviceServer;
+  readonly getRuntimeConfig?: (() => AgentConfig) | undefined;
+  readonly rebindRuntime?: ((bindHost: string, port: number) => Promise<void>) | undefined;
   readonly sessionManager: SessionManager;
+  readonly updateRuntimeConfig?: ((config: AgentConfig) => void) | undefined;
 }
 
 export function registerRoutes(app: FastifyInstance, context: RouteContext): void {
-  const deviceAliases = new Map<string, string>();
-  let runtimeBind = {
-    bindHost: context.config.bindHost,
-    port: context.config.port,
-  };
-  let runtimeClipboardEnabled = context.config.clipboard.enabled;
+  const runtimeConfig = () => context.getRuntimeConfig?.() ?? context.config;
+  const updateRuntimeConfig =
+    context.updateRuntimeConfig ??
+    (() => {
+      return;
+    });
 
   app.get("/api/health", async () => ({
     status: "ok",
@@ -29,10 +32,11 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
+    const config = runtimeConfig();
     return {
-      bindHost: runtimeBind.bindHost,
-      clipboardEnabled: runtimeClipboardEnabled,
-      port: runtimeBind.port,
+      bindHost: config.bindHost,
+      clipboardEnabled: config.clipboard.enabled,
+      port: config.port,
     };
   });
 
@@ -41,7 +45,7 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     return {
-      url: createShareUrl(runtimeBind.bindHost, runtimeBind.port),
+      url: createShareUrl(runtimeConfig().bindHost, runtimeConfig().port),
     };
   });
 
@@ -62,15 +66,16 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     if (!isLocalBind(bindHost) && !context.config.authToken) {
       return reply.code(400).send({ error: "Non-local bind addresses require authToken." });
     }
-    runtimeBind = { bindHost, port: nextPort };
-    return {
+    await context.rebindRuntime?.(bindHost, nextPort);
+    const response = {
       bindHost,
-      clipboardEnabled: runtimeClipboardEnabled,
-      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      clipboardEnabled: runtimeConfig().clipboard.enabled,
+      message: `Agent is now listening on ${bindHost}:${nextPort}.`,
       ok: true,
       port: nextPort,
       shareUrl: createShareUrl(bindHost, nextPort),
     };
+    return response;
   });
 
   app.patch("/api/config/clipboard", async (request, reply) => {
@@ -81,13 +86,18 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     if (typeof payload?.enabled !== "boolean") {
       return reply.code(400).send({ error: "enabled must be a boolean" });
     }
-    runtimeClipboardEnabled = payload.enabled;
+    const nextConfig = {
+      ...runtimeConfig(),
+      clipboard: { enabled: payload.enabled },
+    };
+    updateRuntimeConfig(nextConfig);
+    const config = runtimeConfig();
     return {
-      bindHost: runtimeBind.bindHost,
-      clipboardEnabled: runtimeClipboardEnabled,
-      message: `Clipboard sync ${runtimeClipboardEnabled ? "enabled" : "disabled"}`,
+      bindHost: config.bindHost,
+      clipboardEnabled: config.clipboard.enabled,
+      message: `Clipboard sync ${config.clipboard.enabled ? "enabled" : "disabled"}`,
       ok: true,
-      port: runtimeBind.port,
+      port: config.port,
     };
   });
 
@@ -96,7 +106,7 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     return {
-      devices: applyAliases(await context.adbProvider.listDevices(), deviceAliases),
+      devices: await context.adbProvider.listDevices(),
     };
   });
 
@@ -105,7 +115,7 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     return {
-      devices: applyAliases(await context.adbProvider.listDevices(), deviceAliases),
+      devices: await context.adbProvider.listDevices(),
     };
   });
 
@@ -122,18 +132,21 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     return { message: `Endpoint ${endpoint} connected`, ok: true };
   });
 
-  app.post("/api/devices/:serial/rename", async (request, reply) => {
+  app.get("/api/devices/:serial/logs", async (request, reply) => {
     if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
       return reply.code(401).send({ error: "Invalid agent auth token" });
     }
     const params = request.params as { serial: string };
-    const payload = request.body as { alias?: string } | undefined;
-    const alias = payload?.alias?.trim();
-    if (!alias) {
-      return reply.code(400).send({ error: "alias is required" });
+    const query = request.query as { lines?: string } | undefined;
+    const lines = Number(query?.lines ?? 200);
+    if (!Number.isInteger(lines) || lines < 1 || lines > 1000) {
+      return reply.code(400).send({ error: "lines must be between 1 and 1000" });
     }
-    deviceAliases.set(params.serial, alias);
-    return { message: `Device ${params.serial} renamed`, ok: true };
+    return {
+      lines: await context.adbProvider.readDeviceLogs(params.serial, lines),
+      ok: true,
+      serial: params.serial,
+    };
   });
 
   app.post("/api/devices/:serial/disconnect", async (request, reply) => {
@@ -194,14 +207,4 @@ function createShareUrl(bindHost: string, port: number): string {
   }
   const host = bindHost.includes(":") && !bindHost.startsWith("[") ? `[${bindHost}]` : bindHost;
   return `http://${host}:${port}`;
-}
-
-function applyAliases<T extends { readonly model?: string | undefined; readonly serial: string }>(
-  devices: readonly T[],
-  aliases: ReadonlyMap<string, string>,
-): T[] {
-  return devices.map((device) => {
-    const alias = aliases.get(device.serial);
-    return alias ? { ...device, model: alias } : device;
-  });
 }

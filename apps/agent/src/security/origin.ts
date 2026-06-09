@@ -10,10 +10,28 @@ export function isAllowedOrigin(
   }
   try {
     const url = new URL(origin);
+    if (url.protocol !== "http:") {
+      return false;
+    }
+    if (
+      requestHost !== undefined &&
+      isLocalDevUiOrigin(url) &&
+      isAllowedHost(requestHost, config)
+    ) {
+      return true;
+    }
     if (!isAllowedHost(url.host, config)) {
       return false;
     }
-    return requestHost ? normalizeHost(url.host) === normalizeHost(requestHost) : true;
+    if (
+      requestHost &&
+      isLocalHost(url.host) &&
+      isLocalHost(requestHost) &&
+      samePort(url, requestHost)
+    ) {
+      return true;
+    }
+    return requestHost ? sameEndpoint(url, requestHost) : true;
   } catch {
     return false;
   }
@@ -24,8 +42,12 @@ export function isAllowedHost(host: string | undefined, config: AgentConfig): bo
     return false;
   }
   const normalized = normalizeHost(host);
-  if (config.bindHost === "127.0.0.1") {
-    return normalized === "127.0.0.1" || normalized === "localhost";
+  if (
+    config.bindHost === "127.0.0.1" ||
+    config.bindHost === "localhost" ||
+    config.bindHost === "::1"
+  ) {
+    return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
   }
   if (config.bindHost === "0.0.0.0" || config.bindHost === "::") {
     return normalized.length > 0;
@@ -34,5 +56,48 @@ export function isAllowedHost(host: string | undefined, config: AgentConfig): bo
 }
 
 function normalizeHost(host: string): string {
-  return host.split(":")[0]!.toLowerCase();
+  const normalized = host.toLowerCase();
+  if (normalized.startsWith("[")) {
+    return normalized.slice(1, normalized.indexOf("]"));
+  }
+  const firstColon = normalized.indexOf(":");
+  if (firstColon === -1) {
+    return normalized;
+  }
+  if (firstColon === normalized.lastIndexOf(":")) {
+    return normalized.slice(0, firstColon);
+  }
+  return normalized;
+}
+
+function isLocalHost(host: string): boolean {
+  const normalized = normalizeHost(host);
+  return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
+}
+
+function isLocalDevUiOrigin(url: URL): boolean {
+  return url.port === "5173" && isLocalHost(url.host);
+}
+
+function samePort(url: URL, host: string): boolean {
+  return (
+    (url.port || defaultPort(url.protocol)) === (extractPort(host) || defaultPort(url.protocol))
+  );
+}
+
+function sameEndpoint(url: URL, host: string): boolean {
+  return normalizeHost(url.host) === normalizeHost(host) && samePort(url, host);
+}
+
+function defaultPort(protocol: string): string {
+  return protocol === "https:" ? "443" : "80";
+}
+
+function extractPort(host: string): string {
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return host.slice(end + 1).replace(/^:/, "");
+  }
+  const parts = host.split(":");
+  return parts.length === 2 ? (parts[1] ?? "") : "";
 }

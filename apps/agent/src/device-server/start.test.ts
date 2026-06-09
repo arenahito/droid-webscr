@@ -70,6 +70,23 @@ describe("ADB device server boundary", () => {
     expect(adbSession.closed).toBe(true);
   });
 
+  it("closes partially started ADB resources when startup is aborted", async () => {
+    const provider = new FakeAdbProvider([
+      {
+        authorizationState: AdbAuthorizationState.Authorized,
+        serial: "emulator-5554",
+        transportKind: AdbTransportKind.Emulator,
+      },
+    ]);
+    const server = new AdbDeviceServer(provider);
+    const abort = new AbortController();
+
+    abort.abort();
+    await expect(
+      server.start("emulator-5554", { bitrateMbps: 4, fps: 30 }, abort.signal),
+    ).rejects.toThrow("Device session startup aborted.");
+  });
+
   it("waits for the Android server readiness signal before opening the socket", async () => {
     await expect(
       waitForDeviceServerReady(

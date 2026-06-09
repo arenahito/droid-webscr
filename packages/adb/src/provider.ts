@@ -45,6 +45,7 @@ export interface AdbProvider {
   connect(serial: string): Promise<AdbDeviceSession>;
   disconnect?(serial: string): Promise<void>;
   listDevices(): Promise<AdbDeviceDescriptor[]>;
+  readDeviceLogs(serial: string, lines: number): Promise<readonly string[]>;
 }
 
 export function isUsableDevice(device: AdbDeviceDescriptor): boolean {
@@ -53,6 +54,7 @@ export function isUsableDevice(device: AdbDeviceDescriptor): boolean {
 
 export class FakeAdbProvider implements AdbProvider {
   private readonly devices: readonly AdbDeviceDescriptor[];
+  private readonly logs = new Map<string, readonly string[]>();
   private readonly sessions = new Map<string, FakeAdbDeviceSession>();
 
   public constructor(devices: readonly AdbDeviceDescriptor[]) {
@@ -61,6 +63,18 @@ export class FakeAdbProvider implements AdbProvider {
 
   public async listDevices(): Promise<AdbDeviceDescriptor[]> {
     return [...this.devices];
+  }
+
+  public setDeviceLogs(serial: string, lines: readonly string[]): void {
+    this.logs.set(serial, [...lines]);
+  }
+
+  public async readDeviceLogs(serial: string, lines: number): Promise<readonly string[]> {
+    const device = this.devices.find((item) => item.serial === serial);
+    if (!device || !isUsableDevice(device)) {
+      throw new Error(`ADB device is not available: ${serial}`);
+    }
+    return [...(this.logs.get(serial) ?? [])].slice(-lines);
   }
 
   public async connect(serial: string): Promise<FakeAdbDeviceSession> {

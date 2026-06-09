@@ -8,7 +8,12 @@ import {
   MessageType,
   StreamId,
 } from "@droid-webscr/protocol";
-import { createPhoneStyle, DroidWebscrApp } from "./app.js";
+import {
+  createAgentEndpointUrl,
+  createPhoneStyle,
+  createSessionSocketUrl,
+  DroidWebscrApp,
+} from "./app.js";
 import { createMemoryStorage } from "./lib/memory-storage.js";
 import { VideoPipeline, VideoPipelineSnapshot } from "./decoder/video-pipeline.js";
 import { FakeBinaryWebSocket, SessionSocket } from "./transport/session-socket.js";
@@ -41,6 +46,76 @@ describe("DroidWebscrApp", () => {
       height: "106px",
       width: "68px",
     });
+  });
+
+  it("builds session websocket URLs from the active agent endpoint", () => {
+    expect(createSessionSocketUrl("/ws/session/s1?token=t1", "")).toBe("/ws/session/s1?token=t1");
+    expect(createSessionSocketUrl("/ws/session/s1?token=t1", "http://127.0.0.1:7400")).toBe(
+      "ws://127.0.0.1:7400/ws/session/s1?token=t1",
+    );
+    expect(createSessionSocketUrl("/ws/session/s1?token=t1", "https://agent.example")).toBe(
+      "wss://agent.example/ws/session/s1?token=t1",
+    );
+  });
+
+  it("builds agent endpoint URLs without reusing wildcard share URLs", () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        hostname: "192.168.1.20",
+        protocol: "http:",
+      },
+    });
+
+    expect(createAgentEndpointUrl("0.0.0.0", 7400)).toBe("http://192.168.1.20:7400");
+    expect(createAgentEndpointUrl("0.0.0.0", 7400, "http://10.0.0.5:7391")).toBe(
+      "http://10.0.0.5:7400",
+    );
+    expect(createAgentEndpointUrl("::", 7400)).toBe("http://192.168.1.20:7400");
+    expect(createAgentEndpointUrl("127.0.0.1", 7400)).toBe("http://127.0.0.1:7400");
+
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
+  it("uses restored agent endpoints on the frontend dev server", async () => {
+    const storage = createMemoryStorage({
+      "droid-webscr.agentEndpoint": "http://127.0.0.1:7400",
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "http://127.0.0.1:7400/api/devices") {
+        return jsonResponse({ devices: [] });
+      }
+      if (url === "http://127.0.0.1:7400/api/config") {
+        return jsonResponse({
+          bindHost: "127.0.0.1",
+          clipboardEnabled: true,
+          port: 7400,
+        });
+      }
+      if (url === "http://127.0.0.1:7400/api/share-url") {
+        return jsonResponse({ url: "http://127.0.0.1:7400" });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DroidWebscrApp storage={storage} />);
+
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:7400/api/config", {
+        headers: {},
+      }),
+    );
+    expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("renders empty device state and required operational regions", async () => {
@@ -199,6 +274,7 @@ describe("DroidWebscrApp", () => {
 
   it("starts and stops a selected device session", async () => {
     const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
     const createSession = vi.fn(async () => ({
       sessionId: "s-emulator",
       serial: "emulator-5554",
@@ -217,6 +293,7 @@ describe("DroidWebscrApp", () => {
             },
           ],
         }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
       />,
     );
@@ -228,6 +305,7 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(createSession).toHaveBeenCalledWith("emulator-5554", { bitrateMbps: 8, fps: 60 });
+    socket.open();
     expect(await screen.findByText("Session s-emulator")).toBeInTheDocument();
     const stopButton = screen.getByRole("button", { name: "Stop" });
     expect(stopButton).toBeEnabled();
@@ -1944,10 +2022,11 @@ describe("DroidWebscrApp", () => {
   it("matches the design interaction contract for chrome, access, and guarded actions", async () => {
     const user = userEvent.setup();
     const storage = createMemoryStorage();
+    const socket = new FakeBinaryWebSocket();
     const saveRuntimeBind = vi.fn(async (bindHost: string, port: number) => ({
       bindHost,
       clipboardEnabled: false,
-      message: "Runtime bind updated; restart the agent to move the listening socket.",
+      message: `Agent is now listening on ${bindHost}:${port}.`,
       ok: true,
       port,
       shareUrl: `http://${bindHost}:${port}`,
@@ -1984,7 +2063,19 @@ describe("DroidWebscrApp", () => {
           saveRuntimeClipboard,
           shareUrl: async () => ({ url: "http://127.0.0.1:7391" }),
         }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
         storage={storage}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: false,
+            decodedFrames: 0,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "idle",
+            videoSize: undefined,
+          })
+        }
       />,
     );
 
@@ -1995,10 +2086,9 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(screen.getByRole("complementary", { name: "Device and access controls" })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "More actions" }));
-    expect(screen.getByRole("dialog", { name: "Session actions" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Reconnect policy")).toHaveValue("auto");
-    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("button", { name: "Capture" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Bind" }));
     expect(screen.getByRole("dialog", { name: "Bind access" })).toBeInTheDocument();
@@ -2007,14 +2097,13 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByLabelText("Share URL")).toHaveValue("http://127.0.0.1:7391");
     expect(screen.getByText(/Non-local bind addresses allow/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy share URL" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Save bind" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Save bind" }));
+    expect(screen.getByRole("button", { name: "Apply bind" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Apply bind" }));
     expect(saveRuntimeBind).toHaveBeenCalledWith("127.0.0.1", 7391);
     expect(
-      await screen.findByText(
-        "Runtime bind updated; restart the agent to move the listening socket.",
-      ),
+      await screen.findByText("Agent is now listening on 127.0.0.1:7391."),
     ).toBeInTheDocument();
+    expect(storage.getItem("droid-webscr.agentEndpoint")).toBe("http://127.0.0.1:7391");
     await user.click(screen.getByRole("button", { name: "Bind" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -2026,7 +2115,12 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByText("Clipboard sync enabled")).toBeInTheDocument();
     expect(clipboard).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(screen.getByRole("button", { name: "Power" }));
+    expect(screen.getByRole("button", { name: "Power" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rotate right" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    expect(screen.getByRole("button", { name: "Power" })).toBeDisabled();
+    socket.open();
+    await user.click(await screen.findByRole("button", { name: "Power" }));
     expect(screen.getByRole("dialog", { name: "Power action" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send power" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -2084,7 +2178,8 @@ describe("DroidWebscrApp", () => {
   it("matches the design interaction contract for device menus and adb scanning", async () => {
     const user = userEvent.setup();
     const createdSessions: string[] = [];
-    const renamed: Array<readonly [string, string]> = [];
+    const logRequests: Array<readonly [string, number | undefined]> = [];
+    const socket = new FakeBinaryWebSocket();
     let scanCalls = 0;
     render(
       <DroidWebscrApp
@@ -2095,6 +2190,14 @@ describe("DroidWebscrApp", () => {
               sessionId: `s-${serial}`,
               serial,
               token: "token-emulator",
+            };
+          },
+          getDeviceLogs: async (serial, lines) => {
+            logRequests.push([serial, lines]);
+            return {
+              lines: ["06-09 13:40:01.000 I ActivityTaskManager: Displayed app"],
+              ok: true,
+              serial,
             };
           },
           listDevices: async () => [
@@ -2111,10 +2214,6 @@ describe("DroidWebscrApp", () => {
               transportKind: "usb",
             },
           ],
-          renameDevice: async (serial, alias) => {
-            renamed.push([serial, alias]);
-            return { message: "renamed", ok: true };
-          },
           scanDevices: async () => {
             scanCalls += 1;
             return [
@@ -2133,6 +2232,7 @@ describe("DroidWebscrApp", () => {
             ];
           },
         }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
       />,
     );
@@ -2141,20 +2241,23 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
     let menu = screen.getByRole("menu");
     await user.click(within(menu).getByRole("menuitem", { name: "Show device log" }));
-    expect(await screen.findByText("Showing logs for Pixel 6")).toBeInTheDocument();
+    expect(logRequests).toEqual([["R5CW70ABC12", 200]]);
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          (_, element) => element?.textContent?.includes("Displayed app") ?? false,
+        ),
+      ).not.toHaveLength(0),
+    );
 
     await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
     menu = screen.getByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: "Rename device" }));
-    await user.clear(screen.getByLabelText("Display name"));
-    await user.type(screen.getByLabelText("Display name"), "Lab Pixel");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(renamed).toEqual([["R5CW70ABC12", "Lab Pixel"]]);
+    expect(within(menu).queryByRole("menuitem", { name: "Rename device" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Open Lab Pixel menu" }));
-    menu = screen.getByRole("menu");
     await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
     expect(createdSessions).toEqual(["R5CW70ABC12"]);
+    socket.open();
+    expect(await screen.findByText("Session s-R5CW70ABC12")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     await user.click(screen.getByRole("button", { name: "Scan adb devices" }));
@@ -2167,6 +2270,7 @@ describe("DroidWebscrApp", () => {
 
   it("starts sessions from the selected device card menu", async () => {
     const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
     render(
       <DroidWebscrApp
         client={{
@@ -2174,6 +2278,11 @@ describe("DroidWebscrApp", () => {
             sessionId: `s-${serial}`,
             serial,
             token: "token-emulator",
+          }),
+          getDeviceLogs: async (serial) => ({
+            lines: [`${serial} log line`],
+            ok: true,
+            serial,
           }),
           listDevices: async () => [
             {
@@ -2192,6 +2301,7 @@ describe("DroidWebscrApp", () => {
             },
           ],
         }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
       />,
     );
@@ -2200,6 +2310,7 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
     const menu = screen.getByRole("menu");
     await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
+    socket.open();
 
     expect(await screen.findByText("Session s-emulator-5554")).toBeInTheDocument();
 
@@ -2299,6 +2410,15 @@ function decodePointerButtons(frame: Uint8Array): number {
     decoded.value.payload.byteLength,
   );
   return view.getUint16(14, false);
+}
+
+function jsonResponse(body: unknown): Response {
+  return {
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => body,
+    ok: true,
+    status: 200,
+  } as Response;
 }
 
 class FakeVideoPipeline implements VideoPipeline {

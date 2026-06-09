@@ -20,6 +20,19 @@ export class SystemAdbProvider implements AdbProvider {
     return SystemAdbProvider.parseDevices(output);
   }
 
+  /* v8 ignore next 4 -- external adb process boundary */
+  public async readDeviceLogs(serial: string, lines: number): Promise<readonly string[]> {
+    const output = await runAndCollect(this.adbPath, [
+      "-s",
+      serial,
+      "logcat",
+      "-d",
+      "-t",
+      String(lines),
+    ]);
+    return output.split(/\r?\n/).filter(Boolean);
+  }
+
   /* v8 ignore next 3 -- external adb process boundary; deterministic parsing is unit-tested */
   public async connect(serial: string): Promise<AdbDeviceSession> {
     return new SystemAdbDeviceSession(this.adbPath, serial);
@@ -47,6 +60,11 @@ export class SystemAdbProvider implements AdbProvider {
 
 /* v8 ignore start -- external adb process boundary */
 class SystemAdbDeviceSession implements AdbDeviceSession {
+  private readonly forwards = new Set<string>();
+  private readonly sockets = new Set<ForwardedAdbSocket>();
+  private readonly shellChildren = new Set<ReturnType<typeof spawn>>();
+  private readonly shellCloses = new Map<ReturnType<typeof spawn>, Promise<void>>();
+
   public constructor(
     private readonly adbPath: string,
     public readonly serial: string,
@@ -61,6 +79,20 @@ class SystemAdbDeviceSession implements AdbDeviceSession {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    this.shellChildren.add(child);
+    const shellClose = new Promise<void>((resolve) => {
+      child.once("close", () => {
+        this.shellChildren.delete(child);
+        this.shellCloses.delete(child);
+        resolve();
+      });
+      child.once("error", () => {
+        this.shellChildren.delete(child);
+        this.shellCloses.delete(child);
+        resolve();
+      });
+    });
+    this.shellCloses.set(child, shellClose);
     return {
       command,
       exit: new Promise((resolve, reject) => {
@@ -82,16 +114,41 @@ class SystemAdbDeviceSession implements AdbDeviceSession {
       forward.local,
       forward.remote,
     ]);
+    this.forwards.add(forward.local);
     try {
       const socket = await connectLocalPortWithRetry(localPort);
-      return new ForwardedAdbSocket(this.adbPath, this.serial, forward.local, socket);
+      const forwardedSocket = new ForwardedAdbSocket(
+        this.adbPath,
+        this.serial,
+        forward.local,
+        socket,
+        () => {
+          this.forwards.delete(forward.local);
+          this.sockets.delete(forwardedSocket);
+        },
+      );
+      this.sockets.add(forwardedSocket);
+      return forwardedSocket;
     } catch (error) {
       await runAndCollect(this.adbPath, ["-s", this.serial, "forward", "--remove", forward.local]);
+      this.forwards.delete(forward.local);
       throw error;
     }
   }
 
-  public async close(): Promise<void> {}
+  public async close(): Promise<void> {
+    for (const child of this.shellChildren) {
+      child.kill();
+    }
+    await Promise.allSettled([
+      ...this.shellCloses.values(),
+      ...[...this.sockets].map((socket) => socket.close()),
+      ...[...this.forwards].map((forward) =>
+        runAndCollect(this.adbPath, ["-s", this.serial, "forward", "--remove", forward]),
+      ),
+    ]);
+    this.forwards.clear();
+  }
 }
 /* v8 ignore stop */
 
@@ -240,6 +297,7 @@ class ForwardedAdbSocket implements AdbSocket {
     private readonly serial: string,
     private readonly localForward: string,
     private readonly socket: Socket,
+    private readonly onClose: () => void = () => {},
   ) {
     this.chunks = socket;
   }
@@ -257,14 +315,18 @@ class ForwardedAdbSocket implements AdbSocket {
   }
 
   public async close(): Promise<void> {
-    this.socket.destroy();
-    await runAndCollect(this.adbPath, [
-      "-s",
-      this.serial,
-      "forward",
-      "--remove",
-      this.localForward,
-    ]);
+    try {
+      this.socket.destroy();
+      await runAndCollect(this.adbPath, [
+        "-s",
+        this.serial,
+        "forward",
+        "--remove",
+        this.localForward,
+      ]);
+    } finally {
+      this.onClose();
+    }
   }
 }
 /* v8 ignore stop */

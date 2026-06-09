@@ -1,15 +1,82 @@
-import { SystemAdbProvider } from "@droid-webscr/adb";
-import { defaultAgentConfig } from "@droid-webscr/config";
+import { AdbProvider, SystemAdbProvider } from "@droid-webscr/adb";
+import { AgentConfig, defaultAgentConfig } from "@droid-webscr/config";
 import { pathToFileURL } from "node:url";
-import { createFastifyApp } from "./server/create-fastify-app.js";
+import { AgentFastifyApp, createFastifyApp } from "./server/create-fastify-app.js";
 
-export async function startAgent() {
-  const app = await createFastifyApp({
-    adbProvider: new SystemAdbProvider(),
-    config: defaultAgentConfig,
-  });
-  await app.listen({ host: defaultAgentConfig.bindHost, port: defaultAgentConfig.port });
-  return app;
+export interface AgentRuntime {
+  close(): Promise<void>;
+}
+
+export interface StartAgentOptions {
+  readonly adbProvider?: AdbProvider | undefined;
+  readonly config?: AgentConfig | undefined;
+}
+
+export async function startAgent(options: StartAgentOptions = {}) {
+  const adbProvider = options.adbProvider ?? new SystemAdbProvider();
+  let runtimeConfig = options.config ?? defaultAgentConfig;
+  let currentApp: AgentFastifyApp | undefined;
+  let rebindQueue = Promise.resolve();
+  const closingPorts = new Map<number, Promise<void>>();
+
+  const createRuntimeApp = (agentConfig: AgentConfig) =>
+    createFastifyApp({
+      adbProvider,
+      config: agentConfig,
+      getRuntimeConfig: () => runtimeConfig,
+      rebindRuntime,
+      updateRuntimeConfig: (nextConfig) => {
+        runtimeConfig = nextConfig;
+      },
+    });
+
+  const applyRuntimeRebind = async (bindHost: string, port: number) => {
+    const previousApp = currentApp;
+    const previousPort = runtimeConfig.port;
+    if (runtimeConfig.bindHost === bindHost && runtimeConfig.port === port) {
+      return;
+    }
+    const reusesPort = runtimeConfig.port === port;
+    await previousApp?.closeActiveDeviceSessions({ waitForStartup: false });
+    if (reusesPort && previousApp) {
+      previousApp.server.close();
+    } else {
+      await closingPorts.get(port);
+    }
+    const nextApp = await createRuntimeApp({ ...runtimeConfig, bindHost, port });
+    try {
+      await listenWithRetry(nextApp, bindHost, port);
+    } catch (error) {
+      await nextApp.close();
+      if (reusesPort && previousApp) {
+        await listenWithRetry(previousApp, runtimeConfig.bindHost, runtimeConfig.port);
+      }
+      throw error;
+    }
+    runtimeConfig = { ...runtimeConfig, bindHost, port };
+    currentApp = nextApp;
+    if (previousApp) {
+      scheduleClose(previousApp, previousPort, closingPorts);
+    }
+  };
+
+  function rebindRuntime(bindHost: string, port: number) {
+    const queued = rebindQueue.then(() => applyRuntimeRebind(bindHost, port));
+    rebindQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
+  currentApp = await createRuntimeApp(runtimeConfig);
+  await currentApp.listen({ host: runtimeConfig.bindHost, port: runtimeConfig.port });
+  return {
+    close: async () => {
+      await rebindQueue;
+      await currentApp?.closeActiveDeviceSessions({ waitForStartup: true });
+      await currentApp?.close();
+      await Promise.all(closingPorts.values());
+      currentApp = undefined;
+    },
+  } satisfies AgentRuntime;
 }
 
 export function isDirectRun(moduleUrl: string, argv: readonly string[]): boolean {
@@ -21,5 +88,56 @@ if (isDirectRun(import.meta.url, process.argv)) {
   startAgent().catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;
+  });
+}
+
+async function listenWithRetry(
+  app: AgentFastifyApp,
+  host: string,
+  port: number,
+  attempt = 0,
+): Promise<void> {
+  const retryDelayMs = 25;
+  const maxAttempts = 80;
+  try {
+    await app.listen({ host, port });
+  } catch (error) {
+    if (!isAddressInUse(error) || attempt === maxAttempts - 1) {
+      throw error;
+    }
+    await delay(retryDelayMs);
+    await listenWithRetry(app, host, port, attempt + 1);
+  }
+}
+
+function scheduleClose(
+  app: AgentFastifyApp,
+  port: number,
+  closingPorts: Map<number, Promise<void>>,
+): void {
+  const closed = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      void app.close().finally(resolve);
+    }, 0);
+  }).finally(() => {
+    if (closingPorts.get(port) === closed) {
+      closingPorts.delete(port);
+    }
+  });
+  closingPorts.set(port, closed);
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === "EADDRINUSE"
+  );
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
   });
 }

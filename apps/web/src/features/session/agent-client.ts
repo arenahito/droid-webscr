@@ -5,9 +5,9 @@ export interface AgentClient {
   connectEndpoint?(endpoint: string): Promise<DeviceActionResult>;
   createSession(serial: string, video: SessionVideoSettings): Promise<SessionRecord>;
   disconnectDevice?(serial: string): Promise<DeviceActionResult>;
+  getDeviceLogs?(serial: string, lines?: number): Promise<DeviceLogResult>;
   getRuntimeConfig?(): Promise<RuntimeConfig>;
   listDevices(): Promise<readonly DeviceDescriptor[]>;
-  renameDevice?(serial: string, alias: string): Promise<DeviceActionResult>;
   saveRuntimeBind?(bindHost: string, port: number): Promise<RuntimeBindResult>;
   saveRuntimeClipboard?(enabled: boolean): Promise<RuntimeClipboardResult>;
   scanDevices?(): Promise<readonly DeviceDescriptor[]>;
@@ -17,6 +17,12 @@ export interface AgentClient {
 export interface DeviceActionResult {
   readonly ok: boolean;
   readonly message: string;
+}
+
+export interface DeviceLogResult {
+  readonly lines: readonly string[];
+  readonly ok: boolean;
+  readonly serial: string;
 }
 
 export interface RuntimeConfig {
@@ -87,12 +93,17 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
       const body = (await response.json()) as { readonly devices: readonly DeviceDescriptor[] };
       return body.devices;
     },
-    renameDevice: async (serial, alias) =>
-      postJson<DeviceActionResult>(
-        `${baseUrl}/api/devices/${encodeURIComponent(serial)}/rename`,
-        { alias },
-        headers,
-      ),
+    getDeviceLogs: async (serial, lines = 200) => {
+      const params = new URLSearchParams({ lines: String(lines) });
+      const response = await fetch(
+        `${baseUrl}/api/devices/${encodeURIComponent(serial)}/logs?${params.toString()}`,
+        { headers },
+      );
+      if (!response.ok) {
+        throw new Error(`Device logs failed with HTTP ${response.status}`);
+      }
+      return (await response.json()) as DeviceLogResult;
+    },
     saveRuntimeBind: async (bindHost, port) =>
       postJson<RuntimeBindResult>(`${baseUrl}/api/config/bind`, { bindHost, port }, headers, {
         method: "PATCH",

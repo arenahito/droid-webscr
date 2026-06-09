@@ -72,6 +72,13 @@ describe("HTTP agent client", () => {
           devices: [{ authorizationState: "authorized", serial: "emulator-5554" }],
         });
       }
+      if (url.endsWith("/api/devices/emulator-5554/logs?lines=200")) {
+        return jsonResponse({
+          lines: ["06-09 13:40:01.000 I ActivityTaskManager: Displayed app"],
+          ok: true,
+          serial: "emulator-5554",
+        });
+      }
       return jsonResponse({ message: "ok", ok: true });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -105,20 +112,18 @@ describe("HTTP agent client", () => {
       message: "ok",
       ok: true,
     });
-    await expect(client.renameDevice?.("emulator-5554", "Pixel Lab")).resolves.toEqual({
-      message: "ok",
+    await expect(client.getDeviceLogs?.("emulator-5554", 200)).resolves.toEqual({
+      lines: ["06-09 13:40:01.000 I ActivityTaskManager: Displayed app"],
       ok: true,
+      serial: "emulator-5554",
     });
     await expect(client.disconnectDevice?.("emulator-5554")).resolves.toEqual({
       message: "ok",
       ok: true,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:7391/api/devices/emulator-5554/rename",
-      expect.objectContaining({
-        body: JSON.stringify({ alias: "Pixel Lab" }),
-        method: "POST",
-      }),
+      "http://127.0.0.1:7391/api/devices/emulator-5554/logs?lines=200",
+      expect.objectContaining({ headers: {} }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:7391/api/config/bind",

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { FakeAdbProvider } from "@droid-webscr/adb";
+import net from "node:net";
 import { pathToFileURL } from "node:url";
-import { isDirectRun } from "./main.js";
+import { isDirectRun, startAgent } from "./main.js";
 
 describe("isDirectRun", () => {
   it("accepts the current module URL when Node runs the compiled entrypoint", () => {
@@ -14,3 +16,103 @@ describe("isDirectRun", () => {
     ).toBe(false);
   });
 });
+
+describe("startAgent", () => {
+  it("rebinds a real listener on the same port and closes the active replacement", async () => {
+    const port = await getOpenPort();
+    const secondPort = await getOpenPort();
+    const runtime = await startAgent({
+      adbProvider: new FakeAdbProvider([]),
+      config: {
+        authToken: undefined,
+        bindHost: "127.0.0.1",
+        clipboard: { enabled: false },
+        port,
+      },
+    });
+
+    const rebind = await fetch(`http://127.0.0.1:${port}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "localhost", port }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    await fetch(`http://localhost:${port}/api/config/clipboard`, {
+      body: JSON.stringify({ enabled: true }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    await fetch(`http://localhost:${port}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "127.0.0.1", port: secondPort }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    const config = await fetch(`http://127.0.0.1:${secondPort}/api/config`);
+
+    expect(rebind.status).toBe(200);
+    expect(await config.json()).toEqual({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: true,
+      port: secondPort,
+    });
+
+    await runtime.close();
+    await expect(fetch(`http://127.0.0.1:${secondPort}/api/health`)).rejects.toThrow();
+  });
+
+  it("serializes rapid rebinds across ports", async () => {
+    const firstPort = await getOpenPort();
+    const secondPort = await getOpenPort();
+    const runtime = await startAgent({
+      adbProvider: new FakeAdbProvider([]),
+      config: {
+        authToken: undefined,
+        bindHost: "127.0.0.1",
+        clipboard: { enabled: false },
+        port: firstPort,
+      },
+    });
+
+    const firstRebind = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "127.0.0.1", port: secondPort }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    const secondRebind = await fetch(`http://127.0.0.1:${secondPort}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "127.0.0.1", port: firstPort }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    const config = await fetch(`http://127.0.0.1:${firstPort}/api/config`);
+
+    expect(firstRebind.status).toBe(200);
+    expect(secondRebind.status).toBe(200);
+    expect(await config.json()).toEqual({
+      bindHost: "127.0.0.1",
+      clipboardEnabled: false,
+      port: firstPort,
+    });
+
+    await runtime.close();
+  });
+});
+
+async function getOpenPort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (typeof address !== "object" || address === null) {
+        reject(new Error("Failed to allocate a TCP port."));
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+  });
+}

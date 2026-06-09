@@ -81,3 +81,8 @@ test("strict TypeScript options are enabled at the base config", async () => {
   assert.equal(config.compilerOptions.exactOptionalPropertyTypes, true);
   assert.equal(config.compilerOptions.useUnknownInCatchVariables, true);
 });
+
+test("web dev server keeps the agent CORS development origin stable", async () => {
+  const config = await text("apps/web/vite.config.ts");
+  assert.match(config, /strictPort:\s*true/);
+});

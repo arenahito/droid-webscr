@@ -32,16 +32,19 @@ describe("ADB provider contract", () => {
 
   it("connects fake sessions and closes them deterministically", async () => {
     const provider = new FakeAdbProvider([device("emulator-5554")]);
+    provider.setDeviceLogs("emulator-5554", ["line 1", "line 2", "line 3"]);
 
     const session = await provider.connect("emulator-5554");
     await session.push("local.jar", "/data/local/tmp/server.jar");
     const process = await session.shell(["app_process", "/", "dev.droidwebscr.server.Main"]);
     const socket = await session.openSocket("localabstract:droid-webscr");
+    const logs = await provider.readDeviceLogs("emulator-5554", 2);
     await socket.write(new Uint8Array([1]));
     await socket.close();
     await session.close();
 
     expect(session.closed).toBe(true);
+    expect(logs).toEqual(["line 2", "line 3"]);
     expect(session.pushes).toEqual([
       { localPath: "local.jar", remotePath: "/data/local/tmp/server.jar" },
     ]);

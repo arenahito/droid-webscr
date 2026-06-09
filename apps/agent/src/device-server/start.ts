@@ -5,7 +5,11 @@ import { StartedDeviceSession } from "../session/device-session.js";
 import { SessionVideoSettings } from "../session/session-manager.js";
 
 export interface DeviceServer {
-  start(serial: string, video: SessionVideoSettings): Promise<StartedDeviceSession>;
+  start(
+    serial: string,
+    video: SessionVideoSettings,
+    signal?: AbortSignal | undefined,
+  ): Promise<StartedDeviceSession>;
 }
 
 export class AdbDeviceServer implements DeviceServer {
@@ -14,35 +18,85 @@ export class AdbDeviceServer implements DeviceServer {
     private readonly artifact: DeviceServerArtifact = defaultDeviceServerArtifact,
   ) {}
 
-  public async start(serial: string, video: SessionVideoSettings): Promise<StartedDeviceSession> {
-    const session = await this.adbProvider.connect(serial);
-    await deployDeviceServer(session, this.artifact);
-    await session
-      .shell([
-        `CLASSPATH=${this.artifact.remotePath}`,
-        "app_process",
-        "/",
-        "dev.droidwebscr.server.MainKt",
-        "--verify-once",
-        "droid-webscr",
-        "--bitrate-mbps",
-        String(video.bitrateMbps),
-        "--max-fps",
-        String(video.fps),
-      ])
-      .then((process) => waitForDeviceServerReady(process.stdout, "droid-webscr"));
-    const socket = await session.openSocket("localabstract:droid-webscr");
-    return {
-      frames: socket.chunks,
-      serial,
-      stop: async () => {
-        await Promise.allSettled([socket.close(), session.close()]);
-      },
-      write: async (frame) => {
-        await socket.write(frame);
-      },
-    };
+  public async start(
+    serial: string,
+    video: SessionVideoSettings,
+    signal?: AbortSignal | undefined,
+  ): Promise<StartedDeviceSession> {
+    let session: Awaited<ReturnType<AdbProvider["connect"]>> | undefined;
+    let socket:
+      | Awaited<ReturnType<Awaited<ReturnType<AdbProvider["connect"]>>["openSocket"]>>
+      | undefined;
+    try {
+      throwIfAborted(signal);
+      session = await abortable(this.adbProvider.connect(serial), signal);
+      throwIfAborted(signal);
+      await abortable(deployDeviceServer(session, this.artifact), signal);
+      throwIfAborted(signal);
+      const process = await abortable(
+        session.shell([
+          `CLASSPATH=${this.artifact.remotePath}`,
+          "app_process",
+          "/",
+          "dev.droidwebscr.server.MainKt",
+          "--verify-once",
+          "droid-webscr",
+          "--bitrate-mbps",
+          String(video.bitrateMbps),
+          "--max-fps",
+          String(video.fps),
+        ]),
+        signal,
+      );
+      await abortable(waitForDeviceServerReady(process.stdout, "droid-webscr"), signal);
+      throwIfAborted(signal);
+      const socketPromise = session.openSocket("localabstract:droid-webscr");
+      socketPromise
+        .then((lateSocket) => {
+          if (signal?.aborted) {
+            return lateSocket.close();
+          }
+          return undefined;
+        })
+        .catch(() => undefined);
+      socket = await abortable(socketPromise, signal);
+      throwIfAborted(signal);
+      return {
+        frames: socket.chunks,
+        serial,
+        stop: async () => {
+          await Promise.allSettled([socket?.close(), session?.close()]);
+        },
+        write: async (frame) => {
+          await socket?.write(frame);
+        },
+      };
+    } catch (error) {
+      await Promise.allSettled([socket?.close(), session?.close()]);
+      throw error;
+    }
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error("Device session startup aborted.");
+  }
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) {
+    return promise;
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(new Error("Device session startup aborted."));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
 }
 
 export async function waitForDeviceServerReady(

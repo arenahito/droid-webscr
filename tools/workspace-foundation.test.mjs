@@ -9,6 +9,7 @@ test("root package exposes the required quality gate contract", async () => {
   const pkg = await json("package.json");
   const requiredScripts = [
     "dev",
+    "dev:app",
     "build",
     "check",
     "lint",

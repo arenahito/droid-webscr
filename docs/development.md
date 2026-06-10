@@ -16,6 +16,10 @@ Run these commands before committing any implementation task:
 
 All commands must complete without warnings. `pnpm android:emulator:verify` requires an online Android emulator; USB or network devices do not satisfy the emulator-backed acceptance check.
 
+## Local Startup
+
+Run `pnpm dev:app` to build the Android server artifact, prepare the agent `dist` entrypoint, and start the web dev server, agent watch build, and agent runtime together.
+
 ## Security Defaults
 
 - The agent binds to `127.0.0.1` by default.

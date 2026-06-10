@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "turbo dev",
+    "dev:app": "pnpm android:build && pnpm --filter @droid-webscr/agent build && concurrently --kill-others --names web,agent-watch,agent \"pnpm --filter @droid-webscr/web dev\" \"pnpm --filter @droid-webscr/agent dev\" \"node apps/agent/dist/main.js\"",
     "build": "turbo build",
     "check": "pnpm format:check && pnpm lint && pnpm type-check && pnpm test",
     "lint": "oxlint --config oxlint.json . --deny-warnings",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@types/node": "24.10.3",
     "@vitest/coverage-v8": "4.1.8",
+    "concurrently": "^10.0.3",
     "oxfmt": "0.53.0",
     "oxlint": "1.68.0",
     "turbo": "2.9.16",

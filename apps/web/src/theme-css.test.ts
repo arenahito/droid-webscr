@@ -13,6 +13,21 @@ async function readCss(): Promise<string> {
   throw new Error("Unable to read apps/web/src/index.css");
 }
 
+async function readButtonComponent(): Promise<string> {
+  // @ts-expect-error Vitest runs this contract in Node, while the web tsconfig omits Node types.
+  const { readFile } = await import("node:fs/promises");
+  const attempts = await Promise.allSettled(
+    ["apps/web/src/components/ui/button.tsx", "src/components/ui/button.tsx"].map((path) =>
+      readFile(path, "utf8"),
+    ),
+  );
+  const successfulAttempt = attempts.find((attempt) => attempt.status === "fulfilled");
+  if (successfulAttempt?.status === "fulfilled") {
+    return successfulAttempt.value;
+  }
+  throw new Error("Unable to read apps/web/src/components/ui/button.tsx");
+}
+
 function cssBlock(source: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = new RegExp(`${escaped}\\s*\\{(?<body>[^}]*)\\}`).exec(source);
@@ -58,6 +73,21 @@ describe("theme CSS contract", () => {
     expect(css).toMatch(
       /button:not\(:disabled\),\s*select:not\(:disabled\)\s*\{\s*cursor:\s*pointer;\s*\}/,
     );
-    expect(css).toMatch(/select:disabled\s*\{\s*cursor:\s*not-allowed;\s*\}/);
+    expect(css).toMatch(/button:disabled,\s*select:disabled\s*\{\s*cursor:\s*not-allowed;\s*\}/);
+  });
+
+  it("keeps disabled buttons hoverable so the disabled cursor is visible", async () => {
+    const buttonComponent = await readButtonComponent();
+
+    expect(buttonComponent).not.toContain("disabled:pointer-events-none");
+  });
+
+  it("keeps access panel heading spacing aligned with sidebar sections", async () => {
+    const css = await readCss();
+    const sidebarSectionBlock = cssBlock(css, ".sidebar-section");
+    const accessPanelBlock = cssBlock(css, ".access-panel");
+
+    expect(sidebarSectionBlock).toContain("gap: 10px");
+    expect(accessPanelBlock).toContain("gap: 10px");
   });
 });

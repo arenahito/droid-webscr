@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   ArrowLeft,
   Check,
-  Clipboard,
   Home,
   Menu,
   MonitorSmartphone,
@@ -425,30 +424,6 @@ export function DroidWebscrApp({
     },
     [sendSystemAction],
   );
-
-  const toggleClipboardSync = React.useCallback(async () => {
-    const enabled = !runtimeConfig.clipboardEnabled;
-    try {
-      const result = await agentClient.saveRuntimeClipboard?.(enabled);
-      const nextEnabled = result?.clipboardEnabled ?? enabled;
-      setRuntimeConfig((current) => ({
-        ...current,
-        bindHost: result?.bindHost ?? current.bindHost,
-        clipboardEnabled: nextEnabled,
-        port: result?.port ?? current.port,
-      }));
-      dispatch({
-        message: result?.message ?? `INFO Clipboard sync ${nextEnabled ? "enabled" : "disabled"}`,
-        type: "log",
-      });
-      notify(`Clipboard ${nextEnabled ? "enabled" : "disabled"}`);
-    } catch (error) {
-      dispatch({
-        message: error instanceof Error ? error.message : "Clipboard update failed",
-        type: "failed",
-      });
-    }
-  }, [agentClient, notify, runtimeConfig.clipboardEnabled]);
 
   const sendVideoReconfigure = React.useCallback(
     (nextBitrate: number, nextFps: number) => {
@@ -961,10 +936,9 @@ export function DroidWebscrApp({
             selectedSerial={state.selectedSerial}
             accessPanel={
               <AccessPanel
-                clipboardEnabled={runtimeConfig.clipboardEnabled}
+                disabled={Boolean(state.session) || state.phase === "starting"}
                 host={runtimeConfig.bindHost}
                 onBind={openBindDialog}
-                onClipboardToggle={toggleClipboardSync}
                 port={runtimeConfig.port}
               />
             }
@@ -1178,6 +1152,12 @@ function Sidebar({
   const openDeviceMenuRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
+    if (sessionActive) {
+      setOpenSerial(undefined);
+    }
+  }, [sessionActive]);
+
+  React.useEffect(() => {
     if (!openSerial) {
       return undefined;
     }
@@ -1214,6 +1194,7 @@ function Sidebar({
                 className={cn(
                   "device-card",
                   selectedSerial === device.serial && "selected",
+                  sessionActive && selectedSerial !== device.serial && "disabled",
                   openSerial === device.serial && "menu-open",
                 )}
                 key={device.serial}
@@ -1221,6 +1202,7 @@ function Sidebar({
                 <div className="device-card-main">
                   <button
                     aria-label={`${device.model ?? "Android device"} ${device.serial}`}
+                    disabled={sessionActive && selectedSerial !== device.serial}
                     onClick={() => onSelect(device.serial)}
                     type="button"
                   >
@@ -1230,7 +1212,9 @@ function Sidebar({
                       <small>{device.serial}</small>
                       <small className="device-state">
                         <span className="status-dot" />
-                        {device.authorizationState}
+                        {sessionActive && selectedSerial === device.serial
+                          ? "session active"
+                          : device.authorizationState}
                       </small>
                     </span>
                     {selectedSerial === device.serial ? <Check aria-hidden="true" /> : null}
@@ -1238,6 +1222,7 @@ function Sidebar({
                   <Button
                     aria-expanded={openSerial === device.serial}
                     aria-label={`Open ${device.model ?? device.serial} menu`}
+                    disabled={sessionActive}
                     onClick={() => {
                       setOpenSerial((current) =>
                         current === device.serial ? undefined : device.serial,
@@ -1276,6 +1261,7 @@ function Sidebar({
                     Start session
                   </button>
                   <button
+                    disabled={sessionActive}
                     onClick={() => {
                       void onShowDeviceLog(device);
                       setOpenSerial(undefined);
@@ -1287,6 +1273,7 @@ function Sidebar({
                   </button>
                   <button
                     className="danger"
+                    disabled={sessionActive}
                     onClick={() => {
                       setOpenSerial(undefined);
                       void onDisconnect(device.serial);
@@ -1304,11 +1291,11 @@ function Sidebar({
       </div>
       <div className="sidebar-section">
         <h2>ADD DEVICE</h2>
-        <Button onClick={onRefreshDevices} variant="outline">
+        <Button disabled={sessionActive} onClick={onRefreshDevices} variant="outline">
           <RefreshCw aria-hidden="true" data-icon="inline-start" />
           Refresh devices
         </Button>
-        <Button onClick={onConnectEndpoint} variant="secondary">
+        <Button disabled={sessionActive} onClick={onConnectEndpoint} variant="secondary">
           <Wifi aria-hidden="true" data-icon="inline-start" />
           Connect by endpoint
         </Button>
@@ -1319,23 +1306,26 @@ function Sidebar({
 }
 
 function AccessPanel({
-  clipboardEnabled,
+  disabled,
   host,
   onBind,
-  onClipboardToggle,
   port,
 }: {
-  readonly clipboardEnabled: boolean;
+  readonly disabled: boolean;
   readonly host: string;
   readonly onBind: () => void;
-  readonly onClipboardToggle: () => void;
   readonly port: number;
 }): React.ReactElement {
-  const clipboardTitle = `Clipboard sync ${clipboardEnabled ? "enabled" : "disabled"}`;
   return (
     <section className="access-panel">
       <h2>ACCESS</h2>
-      <button aria-label="Bind" className="access-row access-action" onClick={onBind} type="button">
+      <button
+        aria-label="Bind"
+        className="access-row access-action"
+        disabled={disabled}
+        onClick={onBind}
+        type="button"
+      >
         <span>
           <Settings2 aria-hidden="true" data-icon="inline-start" />
           Bind
@@ -1347,22 +1337,6 @@ function AccessPanel({
         Bind {host}:{port}
       </span>
       <span className="compat-text">Bind {host}</span>
-      <button
-        aria-label="Toggle clipboard sync"
-        aria-pressed={clipboardEnabled}
-        className="access-row access-action"
-        onClick={onClipboardToggle}
-        title={clipboardTitle}
-        type="button"
-      >
-        <span>
-          <Clipboard aria-hidden="true" data-icon="inline-start" />
-          Clipboard
-        </span>
-        <span className={cn("switch-pill", clipboardEnabled && "on")} title={clipboardTitle}>
-          <span />
-        </span>
-      </button>
     </section>
   );
 }

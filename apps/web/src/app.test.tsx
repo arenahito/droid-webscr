@@ -128,10 +128,7 @@ describe("DroidWebscrApp", () => {
       }),
     );
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
   });
 
   it("renders empty device state and required operational regions", async () => {
@@ -169,7 +166,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Task list" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Toggle clipboard sync" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
     expect(screen.queryByText("Wi-Fi 100%")).not.toBeInTheDocument();
@@ -280,9 +277,10 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByText("Session creation failed")).toBeInTheDocument();
   });
 
-  it("starts and stops a selected device session", async () => {
+  it("locks sidebar controls to the active device while a session is connected", async () => {
     const user = userEvent.setup();
     const socket = new FakeBinaryWebSocket();
+    let scanCalls = 0;
     const createSession = vi.fn(async () => ({
       sessionId: "s-emulator",
       serial: "emulator-5554",
@@ -299,15 +297,25 @@ describe("DroidWebscrApp", () => {
               serial: "emulator-5554",
               transportKind: "emulator",
             },
+            {
+              authorizationState: "authorized",
+              model: "Pixel 6",
+              serial: "R5CW70ABC12",
+              transportKind: "usb",
+            },
           ],
+          scanDevices: async () => {
+            scanCalls += 1;
+            return [];
+          },
         }}
         sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
       />,
     );
 
-    const device = await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
-    await user.click(device);
+    const pixel8 = await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+    await user.click(pixel8);
     await user.selectOptions(screen.getByRole("combobox", { name: "Bitrate" }), "8");
     await user.selectOptions(screen.getByRole("combobox", { name: "FPS" }), "60");
     await user.click(screen.getByRole("button", { name: "Start" }));
@@ -319,6 +327,15 @@ describe("DroidWebscrApp", () => {
     expect(stopButton).toBeEnabled();
     expect(stopButton).toHaveClass("session-toggle", "session-running");
     expect(screen.getByRole("combobox", { name: "FPS" })).toBeDisabled();
+    expect(pixel8).toHaveTextContent("session active");
+    expect(screen.getByRole("button", { name: /Pixel 6 R5CW70ABC12/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Open Pixel 6 menu" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refresh devices" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Refresh devices" }));
+    expect(scanCalls).toBe(0);
 
     await user.click(stopButton);
 
@@ -329,6 +346,11 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("combobox", { name: "FPS" })).toBeEnabled();
     expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pixel 6 R5CW70ABC12/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Open Pixel 6 menu" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Refresh devices" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Bind" })).toBeEnabled();
   });
 
   it("opens the binary session socket and sends video and system control frames", async () => {
@@ -2046,13 +2068,7 @@ describe("DroidWebscrApp", () => {
       port,
       shareUrl: `http://${bindHost}:${port}`,
     }));
-    const saveRuntimeClipboard = vi.fn(async (enabled: boolean) => ({
-      bindHost: "127.0.0.1",
-      clipboardEnabled: enabled,
-      message: `Clipboard sync ${enabled ? "enabled" : "disabled"}`,
-      ok: true,
-      port: 7391,
-    }));
+    const saveRuntimeClipboard = vi.fn();
     render(
       <DroidWebscrApp
         client={{
@@ -2122,13 +2138,9 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Bind" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
-    const clipboard = screen.getByRole("button", { name: "Toggle clipboard sync" });
-    expect(clipboard).toBeEnabled();
-    expect(clipboard).toHaveAttribute("aria-pressed", "false");
-    await user.click(clipboard);
-    expect(saveRuntimeClipboard).toHaveBeenCalledWith(true);
-    expect(await screen.findByText("Clipboard sync enabled")).toBeInTheDocument();
-    expect(clipboard).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Clipboard")).not.toBeInTheDocument();
+    expect(saveRuntimeClipboard).not.toHaveBeenCalled();
 
     expect(screen.getByRole("button", { name: "Power" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Rotate right" })).toBeEnabled();
@@ -2141,15 +2153,8 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
   });
 
-  it("renders clipboard as the runtime setting source of truth", async () => {
-    const user = userEvent.setup();
-    const saveRuntimeClipboard = vi.fn(async (enabled: boolean) => ({
-      bindHost: "127.0.0.1",
-      clipboardEnabled: enabled,
-      message: `Clipboard sync ${enabled ? "enabled" : "disabled"}`,
-      ok: true,
-      port: 7391,
-    }));
+  it("hides clipboard controls while preserving runtime config compatibility", async () => {
+    const saveRuntimeClipboard = vi.fn();
     render(
       <DroidWebscrApp
         client={{
@@ -2177,17 +2182,11 @@ describe("DroidWebscrApp", () => {
       />,
     );
 
-    const clipboard = await screen.findByRole("button", { name: "Toggle clipboard sync" });
-    expect(clipboard).toHaveAttribute("aria-pressed", "true");
-    expect(clipboard).toHaveAttribute("title", "Clipboard sync enabled");
-
-    await user.click(clipboard);
-
-    expect(saveRuntimeClipboard).toHaveBeenCalledWith(false);
-    expect(await screen.findAllByText("Clipboard sync disabled")).not.toHaveLength(0);
-    expect(clipboard).toHaveAttribute("aria-pressed", "false");
-    expect(clipboard).toHaveAttribute("title", "Clipboard sync disabled");
+    await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+    expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Clipboard")).not.toBeInTheDocument();
     expect(screen.queryByText(/policy/i)).not.toBeInTheDocument();
+    expect(saveRuntimeClipboard).not.toHaveBeenCalled();
   });
 
   it("matches the design interaction contract for device menus and adb scanning", async () => {
@@ -2327,10 +2326,9 @@ describe("DroidWebscrApp", () => {
 
     expect(await screen.findByText("Session s-emulator-5554")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
-    expect(
-      within(screen.getByRole("menu")).getByRole("menuitem", { name: "Start session" }),
-    ).toBeDisabled();
+    const menuButton = screen.getByRole("button", { name: "Open Pixel 8 menu" });
+    expect(menuButton).toBeDisabled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("closes the selected device menu when clicking outside the popup", async () => {

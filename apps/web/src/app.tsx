@@ -58,8 +58,10 @@ import { cn } from "./lib/utils.js";
 import { createCanvasRenderer } from "./renderer/canvas-renderer.js";
 import { applyTheme, persistTheme, readTheme, ThemePreference } from "./theme/theme.js";
 import { createSessionSocket, SessionSocket } from "./transport/session-socket.js";
+import webPackageJson from "../package.json" with { type: "json" };
 
 const disconnectedPhoneIconUrl = new URL("./assets/disconnected-phone.png", import.meta.url).href;
+const appVersionLabel = `v${webPackageJson.version}`;
 
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
@@ -1130,7 +1132,7 @@ function Topbar({
         <MonitorSmartphone aria-hidden="true" />
         <div>
           <h1>droid-webscr</h1>
-          <span>v0.8.2</span>
+          <span>{appVersionLabel}</span>
         </div>
       </div>
       <span aria-label="Session status" className="session-status" hidden>

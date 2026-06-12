@@ -17,8 +17,24 @@ import {
 import { createMemoryStorage } from "./lib/memory-storage.js";
 import { VideoPipeline, VideoPipelineSnapshot } from "./decoder/video-pipeline.js";
 import { FakeBinaryWebSocket, SessionSocket } from "./transport/session-socket.js";
+import webPackageJson from "../package.json" with { type: "json" };
 
 describe("DroidWebscrApp", () => {
+  it("shows the web package version in the brand", async () => {
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
+          listDevices: async () => [],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "droid-webscr" })).toBeInTheDocument();
+    expect(screen.getByText(`v${webPackageJson.version}`)).toBeInTheDocument();
+  });
+
   it("sizes the phone against viewport padding and control rail placement", () => {
     expect(
       createPhoneStyle({ height: 1280, width: 720 }, { height: 360, width: 500 }, false),

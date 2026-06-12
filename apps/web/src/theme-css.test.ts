@@ -51,4 +51,13 @@ describe("theme CSS contract", () => {
     expect(toastBlock).not.toContain("var(--color-primary)");
     expect(toastBlock).not.toContain("var(--color-primary-foreground)");
   });
+
+  it("marks enabled clickable form controls with a pointer cursor", async () => {
+    const css = await readCss();
+
+    expect(css).toMatch(
+      /button:not\(:disabled\),\s*select:not\(:disabled\)\s*\{\s*cursor:\s*pointer;\s*\}/,
+    );
+    expect(css).toMatch(/select:disabled\s*\{\s*cursor:\s*not-allowed;\s*\}/);
+  });
 });

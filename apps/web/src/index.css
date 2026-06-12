@@ -109,6 +109,15 @@ input {
   font: inherit;
 }
 
+button:not(:disabled),
+select:not(:disabled) {
+  cursor: pointer;
+}
+
+select:disabled {
+  cursor: not-allowed;
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: 48px minmax(360px, 1fr) var(--log-height, 136px);

@@ -146,7 +146,7 @@ describe("DroidWebscrApp", () => {
     );
 
     expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Scan adb devices" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh devices" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
     expect(screen.getByLabelText("Android screen viewport")).toBeInTheDocument();
@@ -206,24 +206,20 @@ describe("DroidWebscrApp", () => {
     };
     cleanup();
     render(<DroidWebscrApp client={failingClient} storage={createMemoryStorage()} />);
-    await user.click(await screen.findByRole("button", { name: "Scan adb devices" }));
+    await user.click(await screen.findByRole("button", { name: "Refresh devices" }));
 
     expect(await screen.findAllByText("adb unavailable")).toHaveLength(2);
-    expect(screen.queryByRole("dialog", { name: "Scan adb devices" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Refresh devices" })).not.toBeInTheDocument();
   });
 
-  it("keeps stale scan results out of the adb dialog after refresh failures", async () => {
+  it("refreshes the device list directly and confirms the action with a toast", async () => {
     const user = userEvent.setup();
-    let shouldFailRefresh = false;
     render(
       <DroidWebscrApp
         client={{
           createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
           listDevices: async () => [],
           scanDevices: async () => {
-            if (shouldFailRefresh) {
-              throw new Error("adb unavailable");
-            }
             return [
               {
                 authorizationState: "authorized",
@@ -238,18 +234,14 @@ describe("DroidWebscrApp", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Scan adb devices" }));
-    const scanDialog = screen.getByRole("dialog", { name: "Scan adb devices" });
-    expect(scanDialog).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect selected" })).toBeEnabled();
-    expect(within(scanDialog).getByText("emulator-5554")).toBeInTheDocument();
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Refresh devices" }));
 
-    shouldFailRefresh = true;
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
-
-    expect(await screen.findByText("adb unavailable")).toBeInTheDocument();
-    expect(within(scanDialog).queryByText("emulator-5554")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect selected" })).toBeDisabled();
+    expect(
+      await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Devices refreshed")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("uses fallback messages for non-Error failures", async () => {
@@ -1998,7 +1990,7 @@ describe("DroidWebscrApp", () => {
     expect(storage.getItem("droid-webscr.theme")).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(document.querySelector(".topbar")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Scan adb devices" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh devices" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Android hardware controls" })).toHaveClass(
       "control-rail",
     );
@@ -2283,12 +2275,10 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByText("Session s-R5CW70ABC12")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
-    await user.click(screen.getByRole("button", { name: "Scan adb devices" }));
+    await user.click(screen.getByRole("button", { name: "Refresh devices" }));
     expect(scanCalls).toBe(1);
-    expect(screen.getByRole("dialog", { name: "Scan adb devices" })).toBeInTheDocument();
-    expect(screen.getByText(/Detected devices from adb devices -l/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Connect selected" })).toBeEnabled();
+    expect(await screen.findByText("Devices refreshed")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("starts sessions from the selected device card menu", async () => {

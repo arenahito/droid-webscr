@@ -37,6 +37,8 @@
   --color-status-note-background: #2c2414;
   --color-status-note-border: #72551d;
   --color-status-note-foreground: #f0c96c;
+  --color-toast-background: #047857;
+  --color-toast-foreground: #ffffff;
   --primary-border: #1fb460;
   --primary-bg: linear-gradient(180deg, #1aa85b, #087f43);
   --primary-shadow: 0 8px 18px rgb(18 179 93 / 20%);
@@ -76,6 +78,8 @@
   --color-status-note-background: #fff8ed;
   --color-status-note-border: #efd3a6;
   --color-status-note-foreground: #7a4b0a;
+  --color-toast-background: #047857;
+  --color-toast-foreground: #ffffff;
   --primary-border: #067b37;
   --primary-bg: linear-gradient(180deg, #10a14a, #07883e);
   --primary-shadow: 0 8px 18px rgb(7 136 62 / 18%);
@@ -1000,55 +1004,11 @@ input {
   padding: 9px 10px;
 }
 
-.adb-device-list {
-  display: grid;
-  gap: 8px;
-}
-
-.adb-device-row {
-  align-items: center;
-  background: var(--color-background);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: inherit;
-  display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 9px;
-  text-align: left;
-}
-
-.adb-device-row.selected {
-  border-color: var(--color-primary);
-}
-
-.adb-device-name {
-  color: var(--color-foreground);
-  display: block;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.adb-device-serial {
-  color: var(--color-muted-foreground);
-  display: block;
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 11px;
-  margin-top: 3px;
-}
-
-.adb-device-meta {
-  color: var(--color-muted-foreground);
-  display: flex;
-  font-size: 11px;
-  gap: 6px;
-}
-
 .toast {
-  background: var(--color-primary);
+  background: var(--color-toast-background);
   border-radius: 8px;
   bottom: 18px;
-  color: var(--color-primary-foreground);
+  color: var(--color-toast-foreground);
   font-size: 13px;
   font-weight: 700;
   padding: 10px 14px;

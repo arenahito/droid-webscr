@@ -41,4 +41,14 @@ describe("theme CSS contract", () => {
       expect(leakedLiterals, selector).toEqual([]);
     }
   });
+
+  it("keeps toast colors independent from bright theme primary colors", async () => {
+    const css = await readCss();
+    const toastBlock = cssBlock(css, ".toast");
+
+    expect(toastBlock).toContain("var(--color-toast-background)");
+    expect(toastBlock).toContain("var(--color-toast-foreground)");
+    expect(toastBlock).not.toContain("var(--color-primary)");
+    expect(toastBlock).not.toContain("var(--color-primary-foreground)");
+  });
 });

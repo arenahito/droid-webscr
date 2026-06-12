@@ -4,13 +4,13 @@ import {
   Check,
   Clipboard,
   Home,
-  List,
   Menu,
   MonitorSmartphone,
   MoreVertical,
   Moon,
   Power,
   Play,
+  RefreshCw,
   RotateCcw,
   RotateCw,
   Settings2,
@@ -74,7 +74,7 @@ export interface DroidWebscrAppProps {
 }
 
 type LogLevel = "all" | "info" | "warn" | "error";
-type DialogKind = "adb-scan" | "endpoint" | "bind" | "power" | undefined;
+type DialogKind = "endpoint" | "bind" | "power" | undefined;
 
 interface PinchGesture {
   readonly browserPointerId: number;
@@ -153,8 +153,6 @@ export function DroidWebscrApp({
   const [shareUrl, setShareUrl] = React.useState(
     createShareUrl(fallbackRuntimeConfig.bindHost, fallbackRuntimeConfig.port),
   );
-  const [selectedAdbSerial, setSelectedAdbSerial] = React.useState<string | undefined>();
-  const [adbDialogDevices, setAdbDialogDevices] = React.useState<readonly DeviceDescriptor[]>([]);
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
@@ -468,25 +466,26 @@ export function DroidWebscrApp({
     [sendControlFrame],
   );
 
-  const scanDevices = React.useCallback(async (): Promise<
-    readonly DeviceDescriptor[] | undefined
-  > => {
-    try {
-      setLoadingDevices(true);
-      const nextDevices = await (agentClient.scanDevices?.() ?? agentClient.listDevices());
-      setDevices(nextDevices);
-      notify("ADB scan complete");
-      return nextDevices;
-    } catch (error) {
-      dispatch({
-        message: error instanceof Error ? error.message : "Device scan failed",
-        type: "failed",
-      });
-      return undefined;
-    } finally {
-      setLoadingDevices(false);
-    }
-  }, [agentClient, notify]);
+  const refreshDeviceList = React.useCallback(
+    async (successMessage?: string): Promise<void> => {
+      try {
+        setLoadingDevices(true);
+        const nextDevices = await (agentClient.scanDevices?.() ?? agentClient.listDevices());
+        setDevices(nextDevices);
+        if (successMessage) {
+          notify(successMessage);
+        }
+      } catch (error) {
+        dispatch({
+          message: error instanceof Error ? error.message : "Device scan failed",
+          type: "failed",
+        });
+      } finally {
+        setLoadingDevices(false);
+      }
+    },
+    [agentClient, notify],
+  );
 
   const submitDialog = React.useCallback(async () => {
     const value = dialogValue.trim();
@@ -497,7 +496,7 @@ export function DroidWebscrApp({
       if (dialog === "endpoint") {
         await agentClient.connectEndpoint?.(value);
         notify("Endpoint connected");
-        await scanDevices();
+        await refreshDeviceList();
       }
       if (dialog === "bind") {
         const bindHost = bindHostDraft.trim();
@@ -524,19 +523,8 @@ export function DroidWebscrApp({
       if (dialog === "power") {
         sendSystemAction("power");
       }
-      if (dialog === "adb-scan" && selectedAdbSerial) {
-        const selectedScannedDevice = adbDialogDevices.find(
-          (device) => device.serial === selectedAdbSerial,
-        );
-        if (selectedScannedDevice) {
-          dispatch({ serial: selectedScannedDevice.serial, type: "select-device" });
-          notify("ADB device connected");
-        }
-      }
       setDialog(undefined);
-      setAdbDialogDevices([]);
       setDialogValue("");
-      setSelectedAdbSerial(undefined);
     } catch (error) {
       dispatch({
         message: error instanceof Error ? error.message : "Agent operation failed",
@@ -546,15 +534,13 @@ export function DroidWebscrApp({
   }, [
     agentBaseUrl,
     agentClient,
-    adbDialogDevices,
     bindHostDraft,
     bindPortDraft,
     dialog,
     dialogValue,
     notify,
+    refreshDeviceList,
     runtimeConfig,
-    scanDevices,
-    selectedAdbSerial,
     sendSystemAction,
     storage,
   ]);
@@ -947,18 +933,9 @@ export function DroidWebscrApp({
             onDisconnect={async (serial) => {
               await agentClient.disconnectDevice?.(serial);
               notify("Device disconnected");
-              await scanDevices();
+              await refreshDeviceList();
             }}
-            onOpenAdbScan={() => {
-              void scanDevices().then((nextDevices) => {
-                if (!nextDevices) {
-                  return;
-                }
-                setAdbDialogDevices(nextDevices);
-                setSelectedAdbSerial(nextDevices[0]?.serial);
-                setDialog("adb-scan");
-              });
-            }}
+            onRefreshDevices={() => void refreshDeviceList("Devices refreshed")}
             onSelect={(serial) => dispatch({ serial, type: "select-device" })}
             onShowDeviceLog={async (device) => {
               const label = device.model ?? device.serial;
@@ -1041,32 +1018,13 @@ export function DroidWebscrApp({
           kind={dialog}
           bindHost={bindHostDraft}
           bindPort={bindPortDraft}
-          devices={dialog === "adb-scan" ? adbDialogDevices : devices}
           onCancel={() => {
             setDialog(undefined);
-            setAdbDialogDevices([]);
-            setSelectedAdbSerial(undefined);
           }}
           onCopyShareUrl={() => {
             void navigator.clipboard?.writeText(shareUrl);
             notify("Share URL copied");
           }}
-          onRefreshDevices={() => {
-            void scanDevices().then((nextDevices) => {
-              if (!nextDevices) {
-                setAdbDialogDevices([]);
-                setSelectedAdbSerial(undefined);
-                return;
-              }
-              setAdbDialogDevices(nextDevices);
-              setSelectedAdbSerial((current) =>
-                nextDevices.some((device) => device.serial === current)
-                  ? current
-                  : nextDevices[0]?.serial,
-              );
-            });
-          }}
-          onSelectAdbDevice={setSelectedAdbSerial}
           onSubmit={() => void submitDialog()}
           onBindHostChange={(value) => {
             setBindHostDraft(value);
@@ -1077,7 +1035,6 @@ export function DroidWebscrApp({
             setShareUrl(createShareUrl(bindHostDraft, Number(value), agentBaseUrl));
           }}
           onValueChange={setDialogValue}
-          selectedAdbSerial={selectedAdbSerial}
           shareUrl={shareUrl}
           value={dialogValue}
         />
@@ -1197,7 +1154,7 @@ function Sidebar({
   loading,
   onConnectEndpoint,
   onDisconnect,
-  onOpenAdbScan,
+  onRefreshDevices,
   onSelect,
   onShowDeviceLog,
   onStartSession,
@@ -1209,7 +1166,7 @@ function Sidebar({
   readonly loading: boolean;
   readonly onConnectEndpoint: () => void;
   readonly onDisconnect: (serial: string) => Promise<void>;
-  readonly onOpenAdbScan: () => void;
+  readonly onRefreshDevices: () => void;
   readonly onSelect: (serial: string) => void;
   readonly onShowDeviceLog: (device: DeviceDescriptor) => Promise<void>;
   readonly onStartSession: (device: DeviceDescriptor) => void;
@@ -1347,9 +1304,9 @@ function Sidebar({
       </div>
       <div className="sidebar-section">
         <h2>ADD DEVICE</h2>
-        <Button onClick={onOpenAdbScan} variant="outline">
-          <List aria-hidden="true" data-icon="inline-start" />
-          Scan adb devices
+        <Button onClick={onRefreshDevices} variant="outline">
+          <RefreshCw aria-hidden="true" data-icon="inline-start" />
+          Refresh devices
         </Button>
         <Button onClick={onConnectEndpoint} variant="secondary">
           <Wifi aria-hidden="true" data-icon="inline-start" />
@@ -1861,44 +1818,30 @@ function LogLine({ value }: { readonly value: string }): React.ReactElement {
 function Dialog({
   bindHost,
   bindPort,
-  devices,
   kind,
   onCancel,
   onBindHostChange,
   onBindPortChange,
   onCopyShareUrl,
-  onRefreshDevices,
-  onSelectAdbDevice,
   onSubmit,
   onValueChange,
-  selectedAdbSerial,
   shareUrl,
   value,
 }: {
   readonly bindHost: string;
   readonly bindPort: string;
-  readonly devices: readonly DeviceDescriptor[];
   readonly kind: Exclude<DialogKind, undefined>;
   readonly onCancel: () => void;
   readonly onBindHostChange: (value: string) => void;
   readonly onBindPortChange: (value: string) => void;
   readonly onCopyShareUrl: () => void;
-  readonly onRefreshDevices: () => void;
-  readonly onSelectAdbDevice: (serial: string) => void;
   readonly onSubmit: () => void;
   readonly onValueChange: (value: string) => void;
-  readonly selectedAdbSerial: string | undefined;
   readonly shareUrl: string;
   readonly value: string;
 }): React.ReactElement {
   const title =
-    kind === "endpoint"
-      ? "Connect by endpoint"
-      : kind === "bind"
-        ? "Bind access"
-        : kind === "power"
-          ? "Power action"
-          : "Scan adb devices";
+    kind === "endpoint" ? "Connect by endpoint" : kind === "bind" ? "Bind access" : "Power action";
   return (
     <div
       aria-label={title}
@@ -1964,36 +1907,6 @@ function Dialog({
               action.
             </p>
           ) : null}
-          {kind === "adb-scan" ? (
-            <>
-              <p>
-                Detected devices from adb devices -l. USB devices, running emulators, and already
-                connected network devices appear in the same list.
-              </p>
-              <div className="adb-device-list">
-                {devices.map((device) => (
-                  <button
-                    className={cn(
-                      "adb-device-row",
-                      selectedAdbSerial === device.serial && "selected",
-                    )}
-                    key={device.serial}
-                    onClick={() => onSelectAdbDevice(device.serial)}
-                    type="button"
-                  >
-                    <span>
-                      <span className="adb-device-name">{device.model ?? "Android device"}</span>
-                      <span className="adb-device-serial">{device.serial}</span>
-                    </span>
-                    <span className="adb-device-meta">
-                      <span>{device.authorizationState}</span>
-                      <span>{device.transportKind ?? "adb"}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : null}
         </div>
         <div className="dialog-actions">
           {kind === "power" ? (
@@ -2015,19 +1928,6 @@ function Dialog({
                 Copy share URL
               </Button>
               <Button onClick={onSubmit}>Apply bind</Button>
-            </>
-          ) : null}
-          {kind === "adb-scan" ? (
-            <>
-              <Button onClick={onCancel} variant="outline">
-                Close
-              </Button>
-              <Button onClick={onRefreshDevices} variant="outline">
-                Refresh
-              </Button>
-              <Button disabled={!selectedAdbSerial} onClick={onSubmit}>
-                Connect selected
-              </Button>
             </>
           ) : null}
           {kind === "endpoint" ? (

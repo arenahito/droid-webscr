@@ -1981,6 +1981,13 @@ describe("DroidWebscrApp", () => {
 
     expect(storage.getItem("droid-webscr.theme")).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.querySelector(".topbar")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Scan adb devices" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Android hardware controls" })).toHaveClass(
+      "control-rail",
+    );
+    expect(screen.getByRole("region", { name: "Log drawer" })).toHaveClass("log-drawer");
+
     await user.click(screen.getByRole("button", { name: "Dark theme" }));
 
     expect(storage.getItem("droid-webscr.theme")).toBe("dark");

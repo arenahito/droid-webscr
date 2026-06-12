@@ -23,6 +23,20 @@
 
 :root {
   --control-text: #d6e0ea;
+  --color-topbar: rgb(19 27 36 / 92%);
+  --color-action-surface: #131b24;
+  --color-action-border: #1d2935;
+  --color-action-foreground: #d6e0ea;
+  --color-rail: rgb(19 27 36 / 94%);
+  --color-log: #0b1117;
+  --color-switch-track: #4b5c6c;
+  --color-switch-thumb: #e8eef5;
+  --color-switch-on: #25a65c;
+  --color-resizer: #355b70;
+  --color-danger: #ff6b63;
+  --color-status-note-background: #2c2414;
+  --color-status-note-border: #72551d;
+  --color-status-note-foreground: #f0c96c;
   --primary-border: #1fb460;
   --primary-bg: linear-gradient(180deg, #1aa85b, #087f43);
   --primary-shadow: 0 8px 18px rgb(18 179 93 / 20%);
@@ -48,6 +62,20 @@
   --color-screen-chrome: #eef3f8;
   --color-screen-muted: #667487;
   --control-text: #202a35;
+  --color-topbar: rgb(255 255 255 / 92%);
+  --color-action-surface: #ffffff;
+  --color-action-border: #d8e0ea;
+  --color-action-foreground: #202a35;
+  --color-rail: rgb(255 255 255 / 92%);
+  --color-log: #fbfcfd;
+  --color-switch-track: #b9c5cf;
+  --color-switch-thumb: #ffffff;
+  --color-switch-on: #25a65c;
+  --color-resizer: #c8d2dc;
+  --color-danger: #ce1d17;
+  --color-status-note-background: #fff8ed;
+  --color-status-note-border: #efd3a6;
+  --color-status-note-foreground: #7a4b0a;
   --primary-border: #067b37;
   --primary-bg: linear-gradient(180deg, #10a14a, #07883e);
   --primary-shadow: 0 8px 18px rgb(7 136 62 / 18%);
@@ -100,7 +128,7 @@ input {
 
 .topbar {
   align-items: center;
-  background: rgb(19 27 36 / 92%);
+  background: var(--color-topbar);
   border-bottom: 1px solid var(--color-border);
   display: flex;
   gap: 8px;
@@ -156,7 +184,7 @@ input {
 .topbar .topbar-spacer ~ button {
   background: transparent;
   border-color: transparent;
-  color: #d6e0ea;
+  color: var(--control-text);
   height: 30px;
   min-width: 30px;
   width: 30px;
@@ -177,9 +205,9 @@ input {
 }
 
 .topbar-group button {
-  background: #111821;
-  border-color: #1d2935;
-  color: #e7edf4;
+  background: var(--color-action-surface);
+  border-color: var(--color-action-border);
+  color: var(--color-action-foreground);
   height: 30px;
   min-width: 30px;
   padding: 0;
@@ -326,9 +354,9 @@ input {
 
 .sidebar-section > button[variant],
 .sidebar-section > button {
-  background: #131b24;
-  border-color: #1d2935;
-  color: #d6e0ea;
+  background: var(--color-action-surface);
+  border-color: var(--color-action-border);
+  color: var(--color-action-foreground);
   gap: 12px;
 }
 
@@ -483,7 +511,7 @@ input {
 }
 
 .device-menu button.danger {
-  color: #ff6b63;
+  color: var(--color-danger);
 }
 
 .empty-state {
@@ -612,7 +640,7 @@ input {
 
 .control-rail {
   align-items: center;
-  background: rgb(19 27 36 / 94%);
+  background: var(--color-rail);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: flex;
@@ -651,7 +679,7 @@ input {
   border-bottom: 1px solid var(--color-border);
   border-radius: 0;
   background: transparent;
-  color: #d6e0ea;
+  color: var(--control-text);
   height: 38px;
   width: 46px;
 }
@@ -666,7 +694,7 @@ input {
 }
 
 .control-rail button.danger {
-  color: #ff6b63;
+  color: var(--color-danger);
 }
 
 .access-panel {
@@ -738,7 +766,7 @@ input {
 }
 
 .switch-pill {
-  background: #4b5c6c;
+  background: var(--color-switch-track);
   border-radius: 999px;
   height: 18px;
   justify-self: end;
@@ -748,7 +776,7 @@ input {
 }
 
 .switch-pill span {
-  background: #e8eef5;
+  background: var(--color-switch-thumb);
   border-radius: 999px;
   display: block;
   height: 14px;
@@ -761,7 +789,7 @@ input {
 }
 
 .log-drawer {
-  background: #0b1117;
+  background: var(--color-panel);
   border-top: 1px solid var(--color-border);
   display: grid;
   grid-template-rows: 6px 34px minmax(0, 1fr);
@@ -775,7 +803,7 @@ input {
 }
 
 .drawer-resizer::after {
-  background: #355b70;
+  background: var(--color-resizer);
   border-radius: 999px;
   content: "";
   height: 4px;
@@ -815,7 +843,7 @@ input {
 
 .switch input {
   appearance: none;
-  background: #4b5c6c;
+  background: var(--color-switch-track);
   border: 0;
   border-radius: 999px;
   cursor: pointer;
@@ -826,7 +854,7 @@ input {
 }
 
 .switch input::after {
-  background: #e8eef5;
+  background: var(--color-switch-thumb);
   border-radius: 999px;
   content: "";
   height: 16px;
@@ -838,7 +866,7 @@ input {
 }
 
 .switch input:checked {
-  background: #25a65c;
+  background: var(--color-switch-on);
 }
 
 .switch input:checked::after {
@@ -848,7 +876,7 @@ input {
 .log-toolbar button[aria-label="Clear logs"] {
   background: transparent;
   border-color: transparent;
-  color: #d6e0ea;
+  color: var(--control-text);
   font-size: 11px;
   font-weight: 640;
   gap: 6px;
@@ -860,7 +888,8 @@ input {
 }
 
 .log-lines {
-  color: #d6e0ea;
+  background: var(--color-log);
+  color: var(--control-text);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   line-height: 1.62;
@@ -961,10 +990,10 @@ input {
 }
 
 .status-note {
-  background: color-mix(in srgb, #f2b84b 14%, var(--color-panel));
-  border: 1px solid color-mix(in srgb, #f2b84b 42%, var(--color-border));
+  background: var(--color-status-note-background);
+  border: 1px solid var(--color-status-note-border);
   border-radius: 7px;
-  color: #f0c96c;
+  color: var(--color-status-note-foreground);
   font-size: 12px;
   line-height: 1.45;
   margin: 0;

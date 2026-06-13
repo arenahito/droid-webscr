@@ -107,4 +107,38 @@ describe("theme CSS contract", () => {
     expect(webkitThumbBlock).toContain("background: var(--color-scrollbar-thumb)");
     expect(webkitTrackBlock).toContain("background: var(--color-scrollbar-track)");
   });
+
+  it("styles device log rows by normalized log level", async () => {
+    const css = await readCss();
+    const levels = ["verbose", "debug", "info", "warn", "error"];
+
+    for (const level of levels) {
+      const lineBlock = cssBlock(css, `.log-line-level-${level}`);
+      const labelBlock = cssBlock(css, `.log-level.log-${level}`);
+      expect(lineBlock).toContain(`var(--color-log-${level})`);
+      expect(labelBlock).toContain(`var(--color-log-${level}-strong)`);
+    }
+    expect(css).toContain("--color-log-debug: var(--color-log-verbose)");
+    expect(css).toContain("--color-log-debug-strong: var(--color-log-verbose-strong)");
+    expect(css).toContain("--color-log-info: var(--control-text)");
+    expect(css).toContain("--color-log-info-strong: var(--control-text)");
+  });
+
+  it("keeps structured device log columns from overlapping", async () => {
+    const css = await readCss();
+    const structuredBlock = cssBlock(css, ".log-line-structured");
+    const wrapStructuredBlock = cssBlock(css, ".log-lines.wrap-lines .log-line-structured");
+    const messageBlock = cssBlock(css, ".log-line-message");
+
+    expect(structuredBlock).toContain("display: inline-grid");
+    expect(structuredBlock).toContain(
+      "grid-template-columns: max-content 2ch max-content max-content",
+    );
+    expect(structuredBlock).toContain("min-width: max-content");
+    expect(wrapStructuredBlock).toContain(
+      "grid-template-columns: max-content 2ch max-content minmax(0, 1fr)",
+    );
+    expect(wrapStructuredBlock).toContain("min-width: 0");
+    expect(messageBlock).toContain("min-width: 0");
+  });
 });

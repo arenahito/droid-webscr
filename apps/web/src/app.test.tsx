@@ -2109,13 +2109,75 @@ describe("DroidWebscrApp", () => {
     expect(getDeviceLogs).not.toHaveBeenCalled();
     expect(within(logDrawer).getByText("Waiting for device logs")).toBeInTheDocument();
 
-    act(() => tailSessions[0]?.onLine("06-09 13:40:01.000 I ActivityTaskManager: Tail line 1"));
+    act(() => {
+      tailSessions[0]?.onLine("06-09 13:40:00.000  1000  1000 V VerboseTag: verbose line");
+      tailSessions[0]?.onLine("06-09 13:40:00.100  1000  1000 D DebugTag: debug line");
+      tailSessions[0]?.onLine("06-09 13:40:01.000  1000  1000 I ActivityTaskManager: Tail line 1");
+      tailSessions[0]?.onLine("06-09 13:40:01.100  1000  1000 W WarnTag: warn line");
+      tailSessions[0]?.onLine("06-09 13:40:01.200  1000  1000 E ErrorTag: error line");
+      tailSessions[0]?.onLine("06-09 13:40:01.300  1000  1000 F FatalTag: fatal line");
+      tailSessions[0]?.onLine("10:42:10.231 DEBUG app app style debug line");
+      tailSessions[0]?.onLine("plain unstructured line");
+    });
     expect(await within(logDrawer).findByText(/Tail line 1/)).toBeInTheDocument();
+    const logLevelSelect = within(logDrawer).getByRole("combobox", { name: "Log level" });
+    expect(logLevelSelect).toHaveValue("info");
+    expect(within(logDrawer).queryByText(/verbose line/)).not.toBeInTheDocument();
+    expect(within(logDrawer).queryByText("debug line")).not.toBeInTheDocument();
+    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    await user.selectOptions(logLevelSelect, "all");
+    expect(within(logDrawer).getByText(/verbose line/).parentElement).toHaveClass(
+      "log-line-level-verbose",
+    );
+    expect(within(logDrawer).getByText("debug line").parentElement).toHaveClass(
+      "log-line-level-debug",
+    );
+    expect(within(logDrawer).getByText(/Tail line 1/).parentElement).toHaveClass(
+      "log-line-level-info",
+    );
+    expect(within(logDrawer).getByText("06-09 13:40:01.000")).toHaveClass("log-line-time");
+    expect(within(logDrawer).getByText("ActivityTaskManager")).toHaveClass("log-line-area");
+    expect(within(logDrawer).getByText("Tail line 1")).toHaveClass("log-line-message");
+    expect(within(logDrawer).getByText(/warn line/).parentElement).toHaveClass(
+      "log-line-level-warn",
+    );
+    expect(within(logDrawer).getByText(/error line/).parentElement).toHaveClass(
+      "log-line-level-error",
+    );
+    expect(within(logDrawer).getByText(/fatal line/).parentElement).toHaveClass(
+      "log-line-level-error",
+    );
+    expect(within(logDrawer).getByText(/app style debug line/).parentElement).toHaveClass(
+      "log-line-level-debug",
+    );
 
     const wrapToggle = within(logDrawer).getByRole("checkbox", { name: "Wrap lines" });
     expect(document.querySelector(".log-lines")).not.toHaveClass("wrap-lines");
     await user.click(wrapToggle);
     expect(document.querySelector(".log-lines")).toHaveClass("wrap-lines");
+    expect(within(logDrawer).queryByRole("option", { name: "Verbose" })).not.toBeInTheDocument();
+    expect(within(logDrawer).getByRole("option", { name: "Debug" })).toBeInTheDocument();
+    await user.selectOptions(logLevelSelect, "debug");
+    expect(within(logDrawer).queryByText(/verbose line/)).not.toBeInTheDocument();
+    expect(within(logDrawer).getByText("debug line")).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/app style debug line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/Tail line 1/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/fatal line/)).toBeInTheDocument();
+    expect(within(logDrawer).queryByText(/plain unstructured line/)).not.toBeInTheDocument();
+    await user.selectOptions(logLevelSelect, "info");
+    expect(within(logDrawer).queryByText("debug line")).not.toBeInTheDocument();
+    expect(within(logDrawer).queryByText(/verbose line/)).not.toBeInTheDocument();
+    expect(within(logDrawer).getByText(/Tail line 1/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    await user.selectOptions(logLevelSelect, "error");
+    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/fatal line/)).toBeInTheDocument();
+    expect(within(logDrawer).queryByText(/warn line/)).not.toBeInTheDocument();
+    await user.selectOptions(logLevelSelect, "all");
 
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
@@ -2142,7 +2204,9 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).queryByText(/Tail line 1/)).not.toBeInTheDocument();
 
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
-    act(() => tailSessions[1]?.onLine("06-09 13:40:02.000 I ActivityTaskManager: Tail line 2"));
+    act(() =>
+      tailSessions[1]?.onLine("06-09 13:40:02.000  1000  1000 I ActivityTaskManager: Tail line 2"),
+    );
     expect(await within(logDrawer).findByText(/Tail line 2/)).toBeInTheDocument();
   });
 

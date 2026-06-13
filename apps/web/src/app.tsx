@@ -72,7 +72,8 @@ export interface DroidWebscrAppProps {
   readonly storage?: StorageLike | undefined;
 }
 
-type LogLevel = "all" | "info" | "warn" | "error";
+type NormalizedLogLevel = "debug" | "error" | "info" | "verbose" | "warn";
+type LogLevel = "all" | Exclude<NormalizedLogLevel, "verbose">;
 type DeviceLogStatus = "idle" | "connecting" | "tailing" | "error";
 type DialogKind = "endpoint" | "bind" | "power" | undefined;
 
@@ -154,7 +155,7 @@ export function DroidWebscrApp({
     createShareUrl(fallbackRuntimeConfig.bindHost, fallbackRuntimeConfig.port),
   );
   const [toast, setToast] = React.useState<string | undefined>();
-  const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
+  const [logLevel, setLogLevel] = React.useState<LogLevel>("info");
   const [autoscroll, setAutoscroll] = React.useState(true);
   const [wrapLogLines, setWrapLogLines] = React.useState(false);
   const [logHeight, setLogHeight] = React.useState(180);
@@ -1777,6 +1778,7 @@ function LogDrawer({
             value={level}
           >
             <option value="all">All</option>
+            <option value="debug">Debug</option>
             <option value="info">Info</option>
             <option value="warn">Warn</option>
             <option value="error">Error</option>
@@ -1820,11 +1822,11 @@ function LogLine({ value }: { readonly value: string }): React.ReactElement {
     return <p className="log-line-plain">{value}</p>;
   }
   return (
-    <p className="log-line-structured">
-      <span>{parsed.time}</span>
-      <span className={cn("log-level", `log-${parsed.level.toLowerCase()}`)}>{parsed.level}</span>
-      <span>{parsed.area}</span>
-      <span>{parsed.message}</span>
+    <p className={cn("log-line-structured", `log-line-level-${parsed.level}`)}>
+      <span className="log-line-time">{parsed.time}</span>
+      <span className={cn("log-level", `log-${parsed.level}`)}>{parsed.label}</span>
+      <span className="log-line-area">{parsed.area}</span>
+      <span className="log-line-message">{parsed.message}</span>
     </p>
   );
 }
@@ -2129,16 +2131,30 @@ function extractInsertedText(event: Event): string | undefined {
 function parseLogLine(value: string):
   | {
       readonly area: string;
-      readonly level: "DEBUG" | "ERROR" | "INFO" | "WARN";
+      readonly label: string;
+      readonly level: NormalizedLogLevel;
       readonly message: string;
       readonly time: string;
     }
   | undefined {
-  const match =
+  const logcatMatch =
+    /^(?<time>\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d{3})?)\s+\d+\s+\d+\s+(?<label>[VDIWEFA])\s+(?<area>[^:]+):\s*(?<message>.*)$/.exec(
+      value,
+    );
+  const logcatGroups = logcatMatch?.groups;
+  if (logcatGroups) {
+    const { area, label, message, time } = logcatGroups;
+    const level = label ? normalizeLogcatLevel(label) : undefined;
+    if (area && label && level && message !== undefined && time) {
+      return { area: area.trim(), label, level, message, time };
+    }
+  }
+
+  const appStyleMatch =
     /^(?<time>\d{2}:\d{2}:\d{2}(?:\.\d{3})?)\s+(?<level>DEBUG|ERROR|INFO|WARN)\s+(?<rest>.*)$/.exec(
       value,
     );
-  const groups = match?.groups;
+  const groups = appStyleMatch?.groups;
   if (!groups) {
     return undefined;
   }
@@ -2154,10 +2170,43 @@ function parseLogLine(value: string):
   const [area = "", ...messageParts] = rest.split(/\s+/);
   return {
     area,
-    level,
+    label: level,
+    level: normalizeAppLogLevel(level),
     message: messageParts.join(" "),
     time,
   };
+}
+
+function normalizeLogcatLevel(label: string): NormalizedLogLevel | undefined {
+  if (label === "V") {
+    return "verbose";
+  }
+  if (label === "D") {
+    return "debug";
+  }
+  if (label === "I") {
+    return "info";
+  }
+  if (label === "W") {
+    return "warn";
+  }
+  if (label === "E" || label === "F" || label === "A") {
+    return "error";
+  }
+  return undefined;
+}
+
+function normalizeAppLogLevel(level: "DEBUG" | "ERROR" | "INFO" | "WARN"): NormalizedLogLevel {
+  if (level === "DEBUG") {
+    return "debug";
+  }
+  if (level === "ERROR") {
+    return "error";
+  }
+  if (level === "WARN") {
+    return "warn";
+  }
+  return "info";
 }
 
 function isVisibleLogLine(value: string, level: LogLevel): boolean {
@@ -2165,7 +2214,23 @@ function isVisibleLogLine(value: string, level: LogLevel): boolean {
     return true;
   }
   const parsed = parseLogLine(value);
-  return parsed ? parsed.level.toLowerCase() === level : value.toLowerCase().startsWith(level);
+  return parsed ? logLevelRank(parsed.level) >= logLevelRank(level) : false;
+}
+
+function logLevelRank(level: NormalizedLogLevel): number {
+  if (level === "verbose") {
+    return 0;
+  }
+  if (level === "debug") {
+    return 1;
+  }
+  if (level === "info") {
+    return 2;
+  }
+  if (level === "warn") {
+    return 3;
+  }
+  return 4;
 }
 
 function describeDeviceLogEmptyState(

@@ -2025,6 +2025,20 @@ describe("DroidWebscrApp", () => {
 
     const logDrawer = screen.getByRole("region", { name: "Device log drawer" });
     expect(within(logDrawer).getByRole("heading", { name: "DEVICE LOG" })).toBeInTheDocument();
+    expect(within(logDrawer).getByRole("button", { name: "Expand device log" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(
+      document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+    ).toBe("34px");
+    expect(within(logDrawer).queryByRole("separator", { name: "Resize device log" })).toBeNull();
+    expect(within(logDrawer).queryByText("Select a device to view logs")).toBeNull();
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
+    expect(within(logDrawer).getByRole("button", { name: "Collapse device log" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();
     expect(within(logDrawer).queryByText("Starting stream")).not.toBeInTheDocument();
     expect(within(logDrawer).queryByText("Session stopped")).not.toBeInTheDocument();
@@ -2123,9 +2137,14 @@ describe("DroidWebscrApp", () => {
 
     const logDrawer = await screen.findByRole("region", { name: "Device log drawer" });
     expect(within(logDrawer).getByRole("heading", { name: "DEVICE LOG" })).toBeInTheDocument();
+    expect(within(logDrawer).getByRole("button", { name: "Expand device log" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
     await waitFor(() => expect(tailSessions).toHaveLength(1));
     expect(tailSessions[0]?.serial).toBe("emulator-5554");
     expect(getDeviceLogs).not.toHaveBeenCalled();
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
     expect(within(logDrawer).getByText("Waiting for device logs")).toBeInTheDocument();
 
     act(() => {
@@ -2197,6 +2216,35 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).getByText(/fatal line/)).toBeInTheDocument();
     expect(within(logDrawer).queryByText(/warn line/)).not.toBeInTheDocument();
     await user.selectOptions(logLevelSelect, "all");
+
+    const logLines = document.querySelector<HTMLElement>(".log-lines");
+    expect(logLines).not.toBeNull();
+    setLogScrollMetrics(logLines, { clientHeight: 100, scrollHeight: 1000 });
+    act(() =>
+      tailSessions[0]?.onLine(
+        "06-09 13:40:01.400  1000  1000 I ActivityTaskManager: autoscroll anchor",
+      ),
+    );
+    await waitFor(() => expect(logLines?.scrollTop).toBe(1000));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    });
+    logLines!.scrollTop = 650;
+    fireEvent.scroll(logLines!);
+    act(() =>
+      tailSessions[0]?.onLine("06-09 13:40:01.500  1000  1000 I ActivityTaskManager: paused line"),
+    );
+    expect(await within(logDrawer).findByText("paused line")).toBeInTheDocument();
+    expect(logLines?.scrollTop).toBe(650);
+    setLogScrollMetrics(logLines, { clientHeight: 100, scrollHeight: 1200 });
+    logLines!.scrollTop = 1100;
+    fireEvent.scroll(logLines!);
+    setLogScrollMetrics(logLines, { clientHeight: 100, scrollHeight: 1300 });
+    act(() =>
+      tailSessions[0]?.onLine("06-09 13:40:01.600  1000  1000 I ActivityTaskManager: resumed line"),
+    );
+    expect(await within(logDrawer).findByText("resumed line")).toBeInTheDocument();
+    await waitFor(() => expect(logLines?.scrollTop).toBe(1300));
 
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
@@ -2584,6 +2632,19 @@ function decodePointerButtons(frame: Uint8Array): number {
     decoded.value.payload.byteLength,
   );
   return view.getUint16(14, false);
+}
+
+function setLogScrollMetrics(
+  element: HTMLElement | null,
+  metrics: { readonly clientHeight: number; readonly scrollHeight: number },
+): void {
+  if (!element) {
+    throw new Error("Expected log lines element.");
+  }
+  Object.defineProperties(element, {
+    clientHeight: { configurable: true, value: metrics.clientHeight },
+    scrollHeight: { configurable: true, value: metrics.scrollHeight },
+  });
 }
 
 function jsonResponse(body: unknown): Response {

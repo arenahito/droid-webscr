@@ -46,6 +46,7 @@ import {
   createHttpAgentClient,
   RuntimeConfig,
 } from "./features/session/agent-client.js";
+import { appendLog } from "./features/session/log-drawer-state.js";
 import {
   reduceSessionState,
   SessionRecord,
@@ -162,7 +163,7 @@ export function DroidWebscrApp({
   const [autoscroll, setAutoscroll] = React.useState(true);
   const [wrapLogLines, setWrapLogLines] = React.useState(false);
   const [logHeight, setLogHeight] = React.useState(180);
-  const [logCollapsed, setLogCollapsed] = React.useState(false);
+  const [logCollapsed, setLogCollapsed] = React.useState(true);
   const [logResizing, setLogResizing] = React.useState(false);
   const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
   const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
@@ -301,7 +302,7 @@ export function DroidWebscrApp({
               return;
             }
             setDeviceLogStatus("tailing");
-            setDeviceLogs((current) => [...current, line]);
+            setDeviceLogs((current) => appendLog(current, line));
           },
           signal: controller.signal,
         })
@@ -1754,17 +1755,44 @@ function LogDrawer({
   readonly wrapLines: boolean;
 }): React.ReactElement {
   const [resizerHovered, setResizerHovered] = React.useState(false);
+  const [autoscrollPaused, setAutoscrollPaused] = React.useState(false);
+  const ignoreAutoscrollEventsUntilRef = React.useRef(0);
   const linesRef = React.useRef<HTMLDivElement | null>(null);
   const visibleLogs = logs.filter((log) => isVisibleLogLine(log, level));
   React.useEffect(() => {
     if (!autoscroll) {
+      setAutoscrollPaused(false);
+      return;
+    }
+  }, [autoscroll]);
+  React.useEffect(() => {
+    if (!autoscroll || autoscrollPaused || collapsed) {
       return;
     }
     const lines = linesRef.current;
     if (lines) {
+      const ignoreUntil = Date.now() + 120;
+      ignoreAutoscrollEventsUntilRef.current = ignoreUntil;
       lines.scrollTop = lines.scrollHeight;
+      window.setTimeout(() => {
+        if (ignoreAutoscrollEventsUntilRef.current <= ignoreUntil) {
+          ignoreAutoscrollEventsUntilRef.current = 0;
+        }
+      }, 120);
     }
-  }, [autoscroll, visibleLogs.length]);
+  }, [autoscroll, autoscrollPaused, collapsed, visibleLogs.length]);
+  const handleLogScroll = React.useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      if (Date.now() < ignoreAutoscrollEventsUntilRef.current) {
+        return;
+      }
+      if (!autoscroll) {
+        return;
+      }
+      setAutoscrollPaused(!isLogScrolledToBottom(event.currentTarget));
+    },
+    [autoscroll],
+  );
   return (
     <section
       aria-label="Device log drawer"
@@ -1848,6 +1876,7 @@ function LogDrawer({
         <div
           className={cn("log-lines", wrapLines && "wrap-lines")}
           id="device-log-lines"
+          onScroll={handleLogScroll}
           ref={linesRef}
         >
           {visibleLogs.length === 0 ? (
@@ -1874,6 +1903,10 @@ function LogLine({ value }: { readonly value: string }): React.ReactElement {
       <span className="log-line-message">{parsed.message}</span>
     </p>
   );
+}
+
+function isLogScrolledToBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= 2;
 }
 
 function Dialog({

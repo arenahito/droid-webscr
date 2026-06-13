@@ -9,4 +9,14 @@ describe("log drawer state", () => {
     expect(resizeLogDrawer(900)).toBe(520);
     expect(resizeLogDrawer(320)).toBe(320);
   });
+
+  it("keeps only the latest 5000 log lines", () => {
+    const existingLogs = Array.from({ length: 5000 }, (_, index) => `line ${index}`);
+
+    const nextLogs = appendLog(existingLogs, "line 5000");
+
+    expect(nextLogs).toHaveLength(5000);
+    expect(nextLogs[0]).toBe("line 1");
+    expect(nextLogs.at(-1)).toBe("line 5000");
+  });
 });

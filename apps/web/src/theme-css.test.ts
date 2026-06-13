@@ -141,4 +141,16 @@ describe("theme CSS contract", () => {
     expect(wrapStructuredBlock).toContain("min-width: 0");
     expect(messageBlock).toContain("min-width: 0");
   });
+
+  it("keeps device log tail controls compact in the toolbar", async () => {
+    const css = await readCss();
+    const tailButtonBlock = cssBlock(css, ".log-toolbar .log-tail-toggle");
+    const tailButtonIconBlock = cssBlock(css, ".log-toolbar .log-tail-toggle svg");
+
+    expect(tailButtonBlock).toContain("font-size: 11px");
+    expect(tailButtonBlock).toContain("height: 28px");
+    expect(tailButtonBlock).toContain("gap: 6px");
+    expect(tailButtonIconBlock).toContain("height: 14px");
+    expect(tailButtonIconBlock).toContain("width: 14px");
+  });
 });

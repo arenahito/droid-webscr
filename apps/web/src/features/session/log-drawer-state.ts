@@ -3,7 +3,14 @@ const MAX_LOG_DRAWER_HEIGHT = 520;
 const MAX_LOG_LINES = 5000;
 
 export function appendLog(logs: readonly string[], entry: string): readonly string[] {
-  const nextLogs = [...logs, entry];
+  return appendLogs(logs, [entry]);
+}
+
+export function appendLogs(logs: readonly string[], entries: readonly string[]): readonly string[] {
+  if (entries.length === 0) {
+    return logs;
+  }
+  const nextLogs = [...logs, ...entries];
   return nextLogs.length > MAX_LOG_LINES
     ? nextLogs.slice(nextLogs.length - MAX_LOG_LINES)
     : nextLogs;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLog, clearLogs, resizeLogDrawer } from "./log-drawer-state.js";
+import { appendLog, appendLogs, clearLogs, resizeLogDrawer } from "./log-drawer-state.js";
 
 describe("log drawer state", () => {
   it("appends clears and clamps drawer height", () => {
@@ -14,6 +14,16 @@ describe("log drawer state", () => {
     const existingLogs = Array.from({ length: 5000 }, (_, index) => `line ${index}`);
 
     const nextLogs = appendLog(existingLogs, "line 5000");
+
+    expect(nextLogs).toHaveLength(5000);
+    expect(nextLogs[0]).toBe("line 1");
+    expect(nextLogs.at(-1)).toBe("line 5000");
+  });
+
+  it("batches log append trimming in one pass", () => {
+    const existingLogs = Array.from({ length: 4998 }, (_, index) => `line ${index}`);
+
+    const nextLogs = appendLogs(existingLogs, ["line 4998", "line 4999", "line 5000"]);
 
     expect(nextLogs).toHaveLength(5000);
     expect(nextLogs[0]).toBe("line 1");

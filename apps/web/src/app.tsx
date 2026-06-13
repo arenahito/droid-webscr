@@ -46,7 +46,7 @@ import {
   createHttpAgentClient,
   RuntimeConfig,
 } from "./features/session/agent-client.js";
-import { appendLog } from "./features/session/log-drawer-state.js";
+import { appendLogs } from "./features/session/log-drawer-state.js";
 import {
   reduceSessionState,
   SessionRecord,
@@ -65,6 +65,7 @@ import webPackageJson from "../package.json" with { type: "json" };
 const disconnectedPhoneIconUrl = new URL("./assets/disconnected-phone.png", import.meta.url).href;
 const appVersionLabel = `v${webPackageJson.version}`;
 const collapsedLogHeightPx = 34;
+const deviceLogFlushIntervalMs = 500;
 
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
@@ -165,6 +166,7 @@ export function DroidWebscrApp({
   const [logHeight, setLogHeight] = React.useState(180);
   const [logCollapsed, setLogCollapsed] = React.useState(true);
   const [logResizing, setLogResizing] = React.useState(false);
+  const [deviceLogEnabled, setDeviceLogEnabled] = React.useState(false);
   const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
   const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
   const [state, dispatch] = React.useReducer(reduceSessionState, {
@@ -182,6 +184,9 @@ export function DroidWebscrApp({
   const pointerSlotFrameQueueRef = React.useRef(new Map<number, Promise<void>>());
   const pointerGestureGenerationRef = React.useRef(new Map<number, number>());
   const pointerQueueGenerationRef = React.useRef(0);
+  const pendingDeviceLogsRef = React.useRef<string[]>([]);
+  const deviceLogFlushTimerRef = React.useRef<number | undefined>(undefined);
+  const deviceLogSerialRef = React.useRef<string | undefined>(undefined);
   const pinchGestureRef = React.useRef<PinchGesture | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
@@ -209,6 +214,36 @@ export function DroidWebscrApp({
     setToast(message);
     window.setTimeout(() => setToast(undefined), 1600);
   }, []);
+
+  const clearPendingDeviceLogs = React.useCallback(() => {
+    pendingDeviceLogsRef.current = [];
+    if (deviceLogFlushTimerRef.current !== undefined) {
+      window.clearTimeout(deviceLogFlushTimerRef.current);
+      deviceLogFlushTimerRef.current = undefined;
+    }
+  }, []);
+
+  const flushPendingDeviceLogs = React.useCallback(() => {
+    const entries = pendingDeviceLogsRef.current;
+    pendingDeviceLogsRef.current = [];
+    deviceLogFlushTimerRef.current = undefined;
+    if (entries.length > 0) {
+      setDeviceLogs((current) => appendLogs(current, entries));
+    }
+  }, []);
+
+  const enqueueDeviceLog = React.useCallback(
+    (line: string) => {
+      pendingDeviceLogsRef.current.push(line);
+      if (deviceLogFlushTimerRef.current === undefined) {
+        deviceLogFlushTimerRef.current = window.setTimeout(
+          flushPendingDeviceLogs,
+          deviceLogFlushIntervalMs,
+        );
+      }
+    },
+    [flushPendingDeviceLogs],
+  );
 
   const setLogHeightFromClientY = React.useCallback((clientY: number) => {
     const nextHeight = Math.round(window.innerHeight - clientY);
@@ -287,8 +322,16 @@ export function DroidWebscrApp({
 
   React.useEffect(() => {
     const serial = state.selectedSerial;
-    if (!serial) {
+    clearPendingDeviceLogs();
+    if (deviceLogSerialRef.current !== serial) {
+      deviceLogSerialRef.current = serial;
       setDeviceLogs([]);
+    }
+    if (!serial) {
+      setDeviceLogStatus("idle");
+      return undefined;
+    }
+    if (!deviceLogEnabled) {
       setDeviceLogStatus("idle");
       return undefined;
     }
@@ -302,7 +345,7 @@ export function DroidWebscrApp({
               return;
             }
             setDeviceLogStatus("tailing");
-            setDeviceLogs((current) => appendLog(current, line));
+            enqueueDeviceLog(line);
           },
           signal: controller.signal,
         })
@@ -320,8 +363,18 @@ export function DroidWebscrApp({
         setDeviceLogStatus("error");
         notify(error instanceof Error ? error.message : "Device log tail failed");
       });
-    return () => controller.abort();
-  }, [agentClient, notify, state.selectedSerial]);
+    return () => {
+      controller.abort();
+      clearPendingDeviceLogs();
+    };
+  }, [
+    agentClient,
+    clearPendingDeviceLogs,
+    deviceLogEnabled,
+    enqueueDeviceLog,
+    notify,
+    state.selectedSerial,
+  ]);
 
   const openBindDialog = React.useCallback(() => {
     setBindHostDraft(runtimeConfig.bindHost);
@@ -1011,8 +1064,14 @@ export function DroidWebscrApp({
       </div>
       <LogDrawer
         autoscroll={autoscroll}
+        canStart={Boolean(state.selectedSerial)}
         collapsed={logCollapsed}
-        emptyMessage={describeDeviceLogEmptyState(state.selectedSerial, deviceLogStatus)}
+        emptyMessage={describeDeviceLogEmptyState(
+          state.selectedSerial,
+          deviceLogStatus,
+          deviceLogEnabled,
+        )}
+        enabled={deviceLogEnabled}
         level={logLevel}
         logs={deviceLogs}
         resizing={logResizing}
@@ -1025,6 +1084,12 @@ export function DroidWebscrApp({
           }
         }}
         onLevelChange={setLogLevel}
+        onLogEnabledChange={(enabled) => {
+          if (enabled) {
+            setDeviceLogs([]);
+          }
+          setDeviceLogEnabled(enabled);
+        }}
         onResizeStart={(clientY) => {
           setLogHeightFromClientY(clientY);
           setLogResizing(true);
@@ -1727,28 +1792,34 @@ function AndroidControls({
 
 function LogDrawer({
   autoscroll,
+  canStart,
   collapsed,
   emptyMessage,
+  enabled,
   level,
   logs,
   onAutoscrollChange,
   onClear,
   onCollapsedChange,
   onLevelChange,
+  onLogEnabledChange,
   onResizeStart,
   onWrapLinesChange,
   resizing,
   wrapLines,
 }: {
   readonly autoscroll: boolean;
+  readonly canStart: boolean;
   readonly collapsed: boolean;
   readonly emptyMessage: string;
+  readonly enabled: boolean;
   readonly level: LogLevel;
   readonly logs: readonly string[];
   readonly onAutoscrollChange: (enabled: boolean) => void;
   readonly onClear: () => void;
   readonly onCollapsedChange: (collapsed: boolean) => void;
   readonly onLevelChange: (level: LogLevel) => void;
+  readonly onLogEnabledChange: (enabled: boolean) => void;
   readonly onResizeStart: (clientY: number) => void;
   readonly onWrapLinesChange: (enabled: boolean) => void;
   readonly resizing: boolean;
@@ -1758,7 +1829,10 @@ function LogDrawer({
   const [autoscrollPaused, setAutoscrollPaused] = React.useState(false);
   const ignoreAutoscrollEventsUntilRef = React.useRef(0);
   const linesRef = React.useRef<HTMLDivElement | null>(null);
-  const visibleLogs = logs.filter((log) => isVisibleLogLine(log, level));
+  const visibleLogs = React.useMemo(
+    () => (collapsed ? [] : logs.filter((log) => isVisibleLogLine(log, level))),
+    [collapsed, level, logs],
+  );
   React.useEffect(() => {
     if (!autoscroll) {
       setAutoscrollPaused(false);
@@ -1837,6 +1911,21 @@ function LogDrawer({
                 <option value="error">Error</option>
               </select>
             </label>
+            <Button
+              aria-label={enabled ? "Stop log" : "Start log"}
+              className="log-tail-toggle"
+              disabled={!canStart}
+              onClick={() => onLogEnabledChange(!enabled)}
+              size="sm"
+              variant={enabled ? "outline" : "secondary"}
+            >
+              {enabled ? (
+                <Square aria-hidden="true" data-icon="inline-start" />
+              ) : (
+                <Play aria-hidden="true" data-icon="inline-start" />
+              )}
+              {enabled ? "Stop log" : "Start log"}
+            </Button>
             <label className="switch">
               <input
                 checked={autoscroll}
@@ -2314,9 +2403,13 @@ function logLevelRank(level: NormalizedLogLevel): number {
 function describeDeviceLogEmptyState(
   selectedSerial: string | undefined,
   status: DeviceLogStatus,
+  enabled: boolean,
 ): string {
   if (!selectedSerial) {
     return "Select a device to view logs";
+  }
+  if (!enabled) {
+    return "Start log collection to view device logs";
   }
   if (status === "error") {
     return "Device log tail unavailable";

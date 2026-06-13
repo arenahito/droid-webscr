@@ -2141,11 +2141,23 @@ describe("DroidWebscrApp", () => {
       "aria-expanded",
       "false",
     );
+    expect(within(logDrawer).queryByRole("button", { name: "Start log" })).toBeNull();
+    expect(tailSessions).toHaveLength(0);
+    expect(getDeviceLogs).not.toHaveBeenCalled();
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
+    expect(
+      within(logDrawer).getByText("Start log collection to view device logs"),
+    ).toBeInTheDocument();
+    expect(within(logDrawer).getByRole("button", { name: "Start log" })).toBeEnabled();
+    await user.click(within(logDrawer).getByRole("button", { name: "Start log" }));
     await waitFor(() => expect(tailSessions).toHaveLength(1));
     expect(tailSessions[0]?.serial).toBe("emulator-5554");
     expect(getDeviceLogs).not.toHaveBeenCalled();
-    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
     expect(within(logDrawer).getByText("Waiting for device logs")).toBeInTheDocument();
+    await user.click(within(logDrawer).getByRole("button", { name: "Collapse device log" }));
+    expect(tailSessions[0]?.signal.aborted).toBe(false);
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
+    expect(within(logDrawer).getByRole("button", { name: "Stop log" })).toBeEnabled();
 
     act(() => {
       tailSessions[0]?.onLine("06-09 13:40:00.000  1000  1000 V VerboseTag: verbose line");
@@ -2157,6 +2169,7 @@ describe("DroidWebscrApp", () => {
       tailSessions[0]?.onLine("10:42:10.231 DEBUG app app style debug line");
       tailSessions[0]?.onLine("plain unstructured line");
     });
+    expect(within(logDrawer).queryByText(/Tail line 1/)).not.toBeInTheDocument();
     expect(await within(logDrawer).findByText(/Tail line 1/)).toBeInTheDocument();
     const logLevelSelect = within(logDrawer).getByRole("combobox", { name: "Log level" });
     expect(logLevelSelect).toHaveValue("info");
@@ -2275,6 +2288,10 @@ describe("DroidWebscrApp", () => {
       tailSessions[1]?.onLine("06-09 13:40:02.000  1000  1000 I ActivityTaskManager: Tail line 2"),
     );
     expect(await within(logDrawer).findByText(/Tail line 2/)).toBeInTheDocument();
+    await user.click(within(logDrawer).getByRole("button", { name: "Stop log" }));
+    expect(tailSessions[1]?.signal.aborted).toBe(true);
+    expect(within(logDrawer).getByRole("button", { name: "Start log" })).toBeEnabled();
+    expect(within(logDrawer).getByText(/Tail line 2/)).toBeInTheDocument();
   });
 
   it("matches the design interaction contract for chrome, access, and guarded actions", async () => {

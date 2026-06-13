@@ -895,6 +895,19 @@ select:disabled {
   width: 28px;
 }
 
+.log-toolbar .log-tail-toggle {
+  font-size: 11px;
+  font-weight: 640;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+}
+
+.log-toolbar .log-tail-toggle svg {
+  height: 14px;
+  width: 14px;
+}
+
 .log-toolbar label,
 .switch {
   align-items: center;

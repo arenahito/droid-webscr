@@ -51,11 +51,26 @@ describe("ADB provider contract", () => {
     expect(process.command).toEqual(["app_process", "/", "dev.droidwebscr.server.Main"]);
   });
 
+  it("tails fake device logs until the stream is closed", async () => {
+    const provider = new FakeAdbProvider([device("emulator-5554")]);
+    const tail = await provider.tailDeviceLogs("emulator-5554");
+    const iterator = tail.lines[Symbol.asyncIterator]();
+
+    provider.appendDeviceLog("emulator-5554", "tail line 1");
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "tail line 1" });
+
+    await tail.close();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+  });
+
   it("rejects unavailable fake device sessions", async () => {
     const provider = new FakeAdbProvider([device("offline-1", AdbAuthorizationState.Offline)]);
 
     await expect(provider.connect("offline-1")).rejects.toThrow("ADB device is not available");
     await expect(provider.connect("missing")).rejects.toThrow("ADB device is not available");
+    await expect(provider.tailDeviceLogs("offline-1")).rejects.toThrow(
+      "ADB device is not available",
+    );
   });
 
   it("parses system adb device output behind the provider boundary", () => {

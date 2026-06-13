@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -205,7 +205,7 @@ describe("DroidWebscrApp", () => {
     render(<DroidWebscrApp client={failingClient} storage={createMemoryStorage()} />);
     await user.click(await screen.findByRole("button", { name: "Refresh devices" }));
 
-    expect(await screen.findAllByText("adb unavailable")).toHaveLength(2);
+    expect(await screen.findAllByText("adb unavailable")).toHaveLength(1);
     expect(screen.queryByRole("dialog", { name: "Refresh devices" })).not.toBeInTheDocument();
   });
 
@@ -425,7 +425,7 @@ describe("DroidWebscrApp", () => {
       }),
     );
 
-    expect(await screen.findByText("control:home:Accepted")).toBeInTheDocument();
+    expect(screen.queryByText("control:home:Accepted")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     expect(socket.closed).toBe(true);
@@ -1830,7 +1830,7 @@ describe("DroidWebscrApp", () => {
     socket.receive(new Uint8Array([1]));
 
     expect(await screen.findAllByText("Decode pressure")).toHaveLength(2);
-    expect(screen.getByText("Decode pressure detected")).toBeInTheDocument();
+    expect(screen.queryByText("Decode pressure detected")).not.toBeInTheDocument();
   });
 
   it("reports decoder callback errors", async () => {
@@ -2016,29 +2016,26 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("navigation", { name: "Android hardware controls" })).toHaveClass(
       "control-rail",
     );
-    expect(screen.getByRole("region", { name: "Log drawer" })).toHaveClass("log-drawer");
+    expect(screen.getByRole("region", { name: "Device log drawer" })).toHaveClass("log-drawer");
 
     await user.click(screen.getByRole("button", { name: "Dark theme" }));
 
     expect(storage.getItem("droid-webscr.theme")).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
 
-    const logDrawer = screen.getByRole("region", { name: "Log drawer" });
-    expect(within(logDrawer).getByText("Starting stream")).toBeInTheDocument();
-    expect(within(logDrawer).getByText("Starting stream").closest("p")).toHaveClass(
-      "log-line-structured",
-    );
-    expect(within(logDrawer).getByText("Session stopped").closest("p")).toHaveClass(
-      "log-line-plain",
-    );
+    const logDrawer = screen.getByRole("region", { name: "Device log drawer" });
+    expect(within(logDrawer).getByRole("heading", { name: "DEVICE LOG" })).toBeInTheDocument();
+    expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();
+    expect(within(logDrawer).queryByText("Starting stream")).not.toBeInTheDocument();
+    expect(within(logDrawer).queryByText("Session stopped")).not.toBeInTheDocument();
     await user.selectOptions(
       within(logDrawer).getByRole("combobox", { name: "Log level" }),
       "warn",
     );
-    expect(within(logDrawer).getByText("Bitrate pressure detected")).toBeInTheDocument();
+    expect(within(logDrawer).queryByText("Bitrate pressure detected")).not.toBeInTheDocument();
     expect(within(logDrawer).queryByText("Starting stream")).not.toBeInTheDocument();
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 720 });
-    const logResizer = within(logDrawer).getByRole("separator", { name: "Resize agent log" });
+    const logResizer = within(logDrawer).getByRole("separator", { name: "Resize device log" });
     fireEvent.pointerEnter(logResizer);
     expect(logResizer).toHaveClass("hovered");
     fireEvent.pointerLeave(logResizer);
@@ -2053,7 +2050,91 @@ describe("DroidWebscrApp", () => {
     fireEvent.pointerUp(window);
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
 
-    expect(within(logDrawer).getByText("No logs")).toBeInTheDocument();
+    expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();
+  });
+
+  it("shows only selected device tail logs and supports wrapping", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const getDeviceLogs = vi.fn();
+    const tailSessions: Array<{
+      readonly onLine: (line: string) => void;
+      readonly serial: string;
+      readonly signal: AbortSignal;
+    }> = [];
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async (serial) => ({ serial, sessionId: `s-${serial}`, token: "t1" }),
+          getDeviceLogs,
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+            {
+              authorizationState: "authorized",
+              model: "Pixel 6",
+              serial: "R5CW70ABC12",
+              transportKind: "usb",
+            },
+          ],
+          tailDeviceLogs: async (serial, options) => {
+            tailSessions.push({ onLine: options.onLine, serial, signal: options.signal });
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+          },
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    const logDrawer = await screen.findByRole("region", { name: "Device log drawer" });
+    expect(within(logDrawer).getByRole("heading", { name: "DEVICE LOG" })).toBeInTheDocument();
+    await waitFor(() => expect(tailSessions).toHaveLength(1));
+    expect(tailSessions[0]?.serial).toBe("emulator-5554");
+    expect(getDeviceLogs).not.toHaveBeenCalled();
+    expect(within(logDrawer).getByText("Waiting for device logs")).toBeInTheDocument();
+
+    act(() => tailSessions[0]?.onLine("06-09 13:40:01.000 I ActivityTaskManager: Tail line 1"));
+    expect(await within(logDrawer).findByText(/Tail line 1/)).toBeInTheDocument();
+
+    const wrapToggle = within(logDrawer).getByRole("checkbox", { name: "Wrap lines" });
+    expect(document.querySelector(".log-lines")).not.toHaveClass("wrap-lines");
+    await user.click(wrapToggle);
+    expect(document.querySelector(".log-lines")).toHaveClass("wrap-lines");
+
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("session active");
+    act(() => {
+      socket.receive(
+        encodeFrame({
+          header: createFrameHeader({
+            payloadLength: new TextEncoder().encode("internal app log").byteLength,
+            streamId: StreamId.Log,
+            type: MessageType.LogRecord,
+          }),
+          payload: new TextEncoder().encode("internal app log"),
+        }),
+      );
+    });
+    expect(within(logDrawer).queryByText("internal app log")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await user.click(screen.getByRole("button", { name: /Pixel 6 R5CW70ABC12/ }));
+    await waitFor(() => expect(tailSessions).toHaveLength(2));
+    expect(tailSessions[0]?.signal.aborted).toBe(true);
+    expect(tailSessions[1]?.serial).toBe("R5CW70ABC12");
+    expect(within(logDrawer).queryByText(/Tail line 1/)).not.toBeInTheDocument();
+
+    await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
+    act(() => tailSessions[1]?.onLine("06-09 13:40:02.000 I ActivityTaskManager: Tail line 2"));
+    expect(await within(logDrawer).findByText(/Tail line 2/)).toBeInTheDocument();
   });
 
   it("matches the design interaction contract for chrome, access, and guarded actions", async () => {
@@ -2192,7 +2273,7 @@ describe("DroidWebscrApp", () => {
   it("matches the design interaction contract for device menus and adb scanning", async () => {
     const user = userEvent.setup();
     const createdSessions: string[] = [];
-    const logRequests: Array<readonly [string, number | undefined]> = [];
+    const getDeviceLogs = vi.fn();
     const socket = new FakeBinaryWebSocket();
     let scanCalls = 0;
     render(
@@ -2206,14 +2287,7 @@ describe("DroidWebscrApp", () => {
               token: "token-emulator",
             };
           },
-          getDeviceLogs: async (serial, lines) => {
-            logRequests.push([serial, lines]);
-            return {
-              lines: ["06-09 13:40:01.000 I ActivityTaskManager: Displayed app"],
-              ok: true,
-              serial,
-            };
-          },
+          getDeviceLogs,
           listDevices: async () => [
             {
               authorizationState: "authorized",
@@ -2245,6 +2319,11 @@ describe("DroidWebscrApp", () => {
               },
             ];
           },
+          tailDeviceLogs: async (_serial, options) => {
+            await new Promise<void>((resolve) => {
+              options.signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+          },
         }}
         sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
@@ -2254,18 +2333,10 @@ describe("DroidWebscrApp", () => {
     await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
     await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
     let menu = screen.getByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: "Show device log" }));
-    expect(logRequests).toEqual([["R5CW70ABC12", 200]]);
-    await waitFor(() =>
-      expect(
-        screen.getAllByText(
-          (_, element) => element?.textContent?.includes("Displayed app") ?? false,
-        ),
-      ).not.toHaveLength(0),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
-    menu = screen.getByRole("menu");
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Show device log" }),
+    ).not.toBeInTheDocument();
+    expect(getDeviceLogs).not.toHaveBeenCalled();
     expect(within(menu).queryByRole("menuitem", { name: "Rename device" })).not.toBeInTheDocument();
 
     await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
@@ -2357,7 +2428,7 @@ describe("DroidWebscrApp", () => {
     await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
     await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));
     const menu = screen.getByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: "Show device log" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Open Pixel 8 menu" }));

@@ -5,6 +5,7 @@ import {
   AdbAuthorizationState,
   AdbDeviceDescriptor,
   AdbDeviceSession,
+  AdbLogTail,
   AdbProvider,
   AdbShellProcess,
   AdbSocket,
@@ -31,6 +32,11 @@ export class SystemAdbProvider implements AdbProvider {
       String(lines),
     ]);
     return output.split(/\r?\n/).filter(Boolean);
+  }
+
+  /* v8 ignore next 3 -- external adb process boundary */
+  public async tailDeviceLogs(serial: string): Promise<AdbLogTail> {
+    return startLogcatTail(this.adbPath, serial);
   }
 
   /* v8 ignore next 3 -- external adb process boundary; deterministic parsing is unit-tested */
@@ -226,6 +232,72 @@ async function runAndCollect(command: string, args: readonly string[]): Promise<
     throw new Error(stderr || `${command} ${args.join(" ")} failed with exit code ${code}`);
   }
   return stdout;
+}
+
+async function startLogcatTail(command: string, serial: string): Promise<AdbLogTail> {
+  const epoch = Number(
+    (await runAndCollect(command, ["-s", serial, "shell", "date", "+%s"])).trim(),
+  );
+  if (!Number.isFinite(epoch)) {
+    throw new Error("Failed to read device logcat start time.");
+  }
+  const startTime = (
+    await runAndCollect(command, [
+      "-s",
+      serial,
+      "shell",
+      `date -d @${epoch + 1} "+%m-%d %H:%M:%S.000"`,
+    ])
+  ).trim();
+  if (!startTime) {
+    throw new Error("Failed to read device logcat start time.");
+  }
+  const child = spawn(command, ["-s", serial, "logcat", "-v", "threadtime", "-T", startTime], {
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  child.stderr?.resume();
+  let closed = false;
+  const closePromise = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      closed = true;
+      resolve();
+    });
+    child.once("error", () => {
+      closed = true;
+      resolve();
+    });
+  });
+  return {
+    close: async () => {
+      if (!closed) {
+        child.kill();
+      }
+      await closePromise;
+    },
+    lines: splitLines(child.stdout ?? Readable.from([])),
+  };
+}
+
+async function* splitLines(stream: AsyncIterable<Buffer | string>): AsyncIterable<string> {
+  let pending = "";
+  for await (const chunk of stream) {
+    pending += String(chunk);
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      if (isLogcatDataLine(line)) {
+        yield line;
+      }
+    }
+  }
+  if (isLogcatDataLine(pending)) {
+    yield pending;
+  }
+}
+
+function isLogcatDataLine(line: string): boolean {
+  return line.length > 0 && !line.startsWith("--------- beginning of ");
 }
 
 async function collect(stream: AsyncIterable<Buffer | string>): Promise<string> {

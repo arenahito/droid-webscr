@@ -149,6 +149,35 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     };
   });
 
+  app.get("/api/devices/:serial/logs/tail", async (request, reply) => {
+    if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
+      return reply.code(401).send({ error: "Invalid agent auth token" });
+    }
+    const params = request.params as { serial: string };
+    const tail = await context.adbProvider.tailDeviceLogs(params.serial);
+    reply.header("cache-control", "no-cache");
+    reply.header("connection", "keep-alive");
+    reply.header("content-type", "text/event-stream; charset=utf-8");
+    for (const [name, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) {
+        reply.raw.setHeader(name, value);
+      }
+    }
+    reply.raw.statusCode = 200;
+    request.raw.once("close", () => {
+      void tail.close();
+    });
+    try {
+      for await (const line of tail.lines) {
+        reply.raw.write(formatSseData(line));
+      }
+    } finally {
+      await tail.close();
+      reply.raw.end();
+    }
+    return reply;
+  });
+
   app.post("/api/devices/:serial/disconnect", async (request, reply) => {
     if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
       return reply.code(401).send({ error: "Invalid agent auth token" });
@@ -178,6 +207,13 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     const session = await context.sessionManager.create(payload.serial, video);
     return reply.code(201).send(session);
   });
+}
+
+function formatSseData(value: string): string {
+  return `${value
+    .split(/\r?\n/)
+    .map((line) => `data: ${line}`)
+    .join("\n")}\n\n`;
 }
 
 function parseSessionVideoSettings(

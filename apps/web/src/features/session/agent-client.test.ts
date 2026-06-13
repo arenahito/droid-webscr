@@ -141,6 +141,45 @@ describe("HTTP agent client", () => {
     );
   });
 
+  it("streams device log tail lines with abortable authenticated fetch", async () => {
+    const chunks = ["data: first line\n\n", "event: log\ndata: second line\n\n", ": keepalive\n\n"];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async () => ({
+      body,
+      ok: true,
+      status: 200,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createHttpAgentClient({
+      authToken: "secret",
+      baseUrl: "http://127.0.0.1:7391",
+    });
+    const controller = new AbortController();
+    const lines: string[] = [];
+
+    await client.tailDeviceLogs?.("emulator-5554", {
+      onLine: (line) => lines.push(line),
+      signal: controller.signal,
+    });
+
+    expect(lines).toEqual(["first line", "second line"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:7391/api/devices/emulator-5554/logs/tail",
+      {
+        headers: { authorization: "Bearer secret" },
+        signal: controller.signal,
+      },
+    );
+  });
+
   it("sends bearer auth when configured for non-local agents", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.endsWith("/api/devices")) {

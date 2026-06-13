@@ -910,6 +910,11 @@ select:disabled {
   white-space: pre;
 }
 
+.log-lines.wrap-lines p {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .log-line-structured {
   display: grid;
   grid-template-columns: 92px 52px 72px minmax(0, 1fr);

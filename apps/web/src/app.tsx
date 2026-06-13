@@ -73,6 +73,7 @@ export interface DroidWebscrAppProps {
 }
 
 type LogLevel = "all" | "info" | "warn" | "error";
+type DeviceLogStatus = "idle" | "connecting" | "tailing" | "error";
 type DialogKind = "endpoint" | "bind" | "power" | undefined;
 
 interface PinchGesture {
@@ -155,8 +156,11 @@ export function DroidWebscrApp({
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
+  const [wrapLogLines, setWrapLogLines] = React.useState(false);
   const [logHeight, setLogHeight] = React.useState(136);
   const [logResizing, setLogResizing] = React.useState(false);
+  const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
+  const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
   const [state, dispatch] = React.useReducer(reduceSessionState, {
     ...defaultSessionState,
     logs: initialLogs,
@@ -246,10 +250,11 @@ export function DroidWebscrApp({
         message: error instanceof Error ? error.message : "Device listing failed",
         type: "failed",
       });
+      notify(error instanceof Error ? error.message : "Device listing failed");
     } finally {
       setLoadingDevices(false);
     }
-  }, [agentClient, state.selectedSerial]);
+  }, [agentClient, notify, state.selectedSerial]);
 
   React.useEffect(() => {
     void refreshDevices();
@@ -270,6 +275,44 @@ export function DroidWebscrApp({
         .catch(() => undefined);
     }
   }, [agentBaseUrl, agentClient, refreshDevices, storage, useDesignApiFallback]);
+
+  React.useEffect(() => {
+    const serial = state.selectedSerial;
+    if (!serial) {
+      setDeviceLogs([]);
+      setDeviceLogStatus("idle");
+      return undefined;
+    }
+    setDeviceLogs([]);
+    setDeviceLogStatus("connecting");
+    const controller = new AbortController();
+    const tailPromise = agentClient.tailDeviceLogs
+      ? agentClient.tailDeviceLogs(serial, {
+          onLine: (line) => {
+            if (controller.signal.aborted) {
+              return;
+            }
+            setDeviceLogStatus("tailing");
+            setDeviceLogs((current) => [...current, line]);
+          },
+          signal: controller.signal,
+        })
+      : Promise.reject(new Error("Device log tail is unavailable"));
+    void tailPromise
+      .then(() => {
+        if (!controller.signal.aborted) {
+          setDeviceLogStatus("idle");
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setDeviceLogStatus("error");
+        notify(error instanceof Error ? error.message : "Device log tail failed");
+      });
+    return () => controller.abort();
+  }, [agentClient, notify, state.selectedSerial]);
 
   const openBindDialog = React.useCallback(() => {
     setBindHostDraft(runtimeConfig.bindHost);
@@ -334,6 +377,7 @@ export function DroidWebscrApp({
         if (canvas) {
           const pipeline = videoPipelineFactory(canvas, (message) => {
             dispatch({ message, type: "failed" });
+            notify(message);
           });
           videoPipelineRef.current = pipeline;
           socket.onFrame((frame) => {
@@ -369,10 +413,9 @@ export function DroidWebscrApp({
         dispatch({ session, type: "start-succeeded" });
       } catch (error) {
         finishSession({ closeSocket: true });
-        dispatch({
-          message: error instanceof Error ? error.message : "Session creation failed",
-          type: "failed",
-        });
+        const message = error instanceof Error ? error.message : "Session creation failed";
+        dispatch({ message, type: "failed" });
+        notify(message);
       }
     },
     [
@@ -381,6 +424,7 @@ export function DroidWebscrApp({
       bitrateMbps,
       createSessionSocketForRuntime,
       fps,
+      notify,
       setControlReady,
       state.phase,
       state.session,
@@ -455,6 +499,7 @@ export function DroidWebscrApp({
           message: error instanceof Error ? error.message : "Device scan failed",
           type: "failed",
         });
+        notify(error instanceof Error ? error.message : "Device scan failed");
       } finally {
         setLoadingDevices(false);
       }
@@ -493,7 +538,7 @@ export function DroidWebscrApp({
           message: result?.message ?? `INFO Agent is now listening on ${host}:${port}.`,
           type: "log",
         });
-        notify(result?.ok ? "Bind applied" : "Bind update queued");
+        notify(result?.message ?? (result?.ok ? "Bind applied" : "Bind update queued"));
       }
       if (dialog === "power") {
         sendSystemAction("power");
@@ -912,25 +957,6 @@ export function DroidWebscrApp({
             }}
             onRefreshDevices={() => void refreshDeviceList("Devices refreshed")}
             onSelect={(serial) => dispatch({ serial, type: "select-device" })}
-            onShowDeviceLog={async (device) => {
-              const label = device.model ?? device.serial;
-              try {
-                const result = await agentClient.getDeviceLogs?.(device.serial, 200);
-                if (!result) {
-                  dispatch({ message: `WARN Device logs unavailable for ${label}`, type: "log" });
-                  return;
-                }
-                for (const line of result.lines) {
-                  dispatch({ message: line, type: "log" });
-                }
-                notify(`Loaded logs for ${label}`);
-              } catch (error) {
-                dispatch({
-                  message: error instanceof Error ? error.message : "Device log fetch failed",
-                  type: "failed",
-                });
-              }
-            }}
             onStartSession={(device) => void startSessionForSerial(device.serial)}
             sessionActive={Boolean(state.session) || state.phase === "starting"}
             selectedSerial={state.selectedSerial}
@@ -976,16 +1002,19 @@ export function DroidWebscrApp({
       </div>
       <LogDrawer
         autoscroll={autoscroll}
+        emptyMessage={describeDeviceLogEmptyState(state.selectedSerial, deviceLogStatus)}
         level={logLevel}
-        logs={state.logs}
+        logs={deviceLogs}
         resizing={logResizing}
         onAutoscrollChange={setAutoscroll}
-        onClear={() => dispatch({ type: "clear-logs" })}
+        onClear={() => setDeviceLogs([])}
         onLevelChange={setLogLevel}
         onResizeStart={(clientY) => {
           setLogHeightFromClientY(clientY);
           setLogResizing(true);
         }}
+        onWrapLinesChange={setWrapLogLines}
+        wrapLines={wrapLogLines}
       />
       {dialog ? (
         <Dialog
@@ -1130,7 +1159,6 @@ function Sidebar({
   onDisconnect,
   onRefreshDevices,
   onSelect,
-  onShowDeviceLog,
   onStartSession,
   sessionActive,
   selectedSerial,
@@ -1142,7 +1170,6 @@ function Sidebar({
   readonly onDisconnect: (serial: string) => Promise<void>;
   readonly onRefreshDevices: () => void;
   readonly onSelect: (serial: string) => void;
-  readonly onShowDeviceLog: (device: DeviceDescriptor) => Promise<void>;
   readonly onStartSession: (device: DeviceDescriptor) => void;
   readonly sessionActive: boolean;
   readonly selectedSerial: string | undefined;
@@ -1259,17 +1286,6 @@ function Sidebar({
                     type="button"
                   >
                     Start session
-                  </button>
-                  <button
-                    disabled={sessionActive}
-                    onClick={() => {
-                      void onShowDeviceLog(device);
-                      setOpenSerial(undefined);
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    Show device log
                   </button>
                   <button
                     className="danger"
@@ -1695,29 +1711,45 @@ function AndroidControls({
 
 function LogDrawer({
   autoscroll,
+  emptyMessage,
   level,
   logs,
   onAutoscrollChange,
   onClear,
   onLevelChange,
   onResizeStart,
+  onWrapLinesChange,
   resizing,
+  wrapLines,
 }: {
   readonly autoscroll: boolean;
+  readonly emptyMessage: string;
   readonly level: LogLevel;
   readonly logs: readonly string[];
   readonly onAutoscrollChange: (enabled: boolean) => void;
   readonly onClear: () => void;
   readonly onLevelChange: (level: LogLevel) => void;
   readonly onResizeStart: (clientY: number) => void;
+  readonly onWrapLinesChange: (enabled: boolean) => void;
   readonly resizing: boolean;
+  readonly wrapLines: boolean;
 }): React.ReactElement {
   const [resizerHovered, setResizerHovered] = React.useState(false);
+  const linesRef = React.useRef<HTMLDivElement | null>(null);
   const visibleLogs = logs.filter((log) => isVisibleLogLine(log, level));
+  React.useEffect(() => {
+    if (!autoscroll) {
+      return;
+    }
+    const lines = linesRef.current;
+    if (lines) {
+      lines.scrollTop = lines.scrollHeight;
+    }
+  }, [autoscroll, visibleLogs.length]);
   return (
-    <section aria-label="Log drawer" className={cn("log-drawer", resizing && "resizing")}>
+    <section aria-label="Device log drawer" className={cn("log-drawer", resizing && "resizing")}>
       <div
-        aria-label="Resize agent log"
+        aria-label="Resize device log"
         aria-orientation="horizontal"
         className={cn("drawer-resizer", resizerHovered && "hovered")}
         onMouseEnter={() => setResizerHovered(true)}
@@ -1736,7 +1768,7 @@ function LogDrawer({
         role="separator"
       />
       <div className="log-toolbar">
-        <h2>AGENT LOG</h2>
+        <h2>DEVICE LOG</h2>
         <label>
           Level
           <select
@@ -1758,14 +1790,22 @@ function LogDrawer({
           />
           Autoscroll
         </label>
+        <label className="switch">
+          <input
+            checked={wrapLines}
+            onChange={(event) => onWrapLinesChange(event.target.checked)}
+            type="checkbox"
+          />
+          Wrap lines
+        </label>
         <Button aria-label="Clear logs" onClick={onClear} size="sm" variant="outline">
           <Trash2 aria-hidden="true" data-icon="inline-start" />
           Clear
         </Button>
       </div>
-      <div className="log-lines">
+      <div className={cn("log-lines", wrapLines && "wrap-lines")} ref={linesRef}>
         {visibleLogs.length === 0 ? (
-          <p>No logs</p>
+          <p>{emptyMessage}</p>
         ) : (
           visibleLogs.map((log, index) => <LogLine key={`${log}-${index}`} value={log} />)
         )}
@@ -2126,6 +2166,19 @@ function isVisibleLogLine(value: string, level: LogLevel): boolean {
   }
   const parsed = parseLogLine(value);
   return parsed ? parsed.level.toLowerCase() === level : value.toLowerCase().startsWith(level);
+}
+
+function describeDeviceLogEmptyState(
+  selectedSerial: string | undefined,
+  status: DeviceLogStatus,
+): string {
+  if (!selectedSerial) {
+    return "Select a device to view logs";
+  }
+  if (status === "error") {
+    return "Device log tail unavailable";
+  }
+  return "Waiting for device logs";
 }
 
 function describeVideoStatus(snapshot: VideoPipelineSnapshot | undefined): {

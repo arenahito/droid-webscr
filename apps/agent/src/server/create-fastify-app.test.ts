@@ -397,6 +397,44 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("streams device log tail as SSE without reading history", async () => {
+    const context = testContext({
+      authToken: "secret",
+      bindHost: "127.0.0.1",
+      clipboard: { enabled: false },
+      port: 7391,
+    });
+    const adbProvider = context.adbProvider;
+    let historyReads = 0;
+    adbProvider.readDeviceLogs = async () => {
+      historyReads += 1;
+      return ["history should not be read"];
+    };
+    const app = await createFastifyApp(context);
+    const responsePromise = app.inject({
+      headers: { authorization: "Bearer secret", origin: "http://localhost:5173" },
+      method: "GET",
+      url: "/api/devices/emulator-5554/logs/tail",
+    });
+
+    await waitForCondition(() => adbProvider.activeLogTails("emulator-5554").length > 0);
+    adbProvider.appendDeviceLog("emulator-5554", "tail line 1");
+    adbProvider.appendDeviceLog("emulator-5554", "tail line 2");
+    await Promise.all(
+      adbProvider.activeLogTails("emulator-5554").map((activeTail) => activeTail.close()),
+    );
+
+    const response = await responsePromise;
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(response.body).toContain("data: tail line 1\n\n");
+    expect(response.body).toContain("data: tail line 2\n\n");
+    expect(historyReads).toBe(0);
+    await app.close();
+  });
+
   it("normalizes share URLs for wildcard and IPv6 bind hosts", async () => {
     const wildcard = await createFastifyApp(
       testContext({
@@ -1017,6 +1055,17 @@ async function waitForWebSocketClose(ws: {
   await new Promise<void>((resolve) => {
     ws.once("close", resolve);
   });
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- polling must wait between predicate checks.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
 function testContext(

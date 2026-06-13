@@ -26,6 +26,11 @@ export interface AdbShellProcess {
   readonly exit: Promise<number>;
 }
 
+export interface AdbLogTail {
+  readonly lines: AsyncIterable<string>;
+  close(): Promise<void>;
+}
+
 export interface AdbDeviceSession {
   readonly serial: string;
   close(): Promise<void>;
@@ -46,6 +51,7 @@ export interface AdbProvider {
   disconnect?(serial: string): Promise<void>;
   listDevices(): Promise<AdbDeviceDescriptor[]>;
   readDeviceLogs(serial: string, lines: number): Promise<readonly string[]>;
+  tailDeviceLogs(serial: string): Promise<AdbLogTail>;
 }
 
 export function isUsableDevice(device: AdbDeviceDescriptor): boolean {
@@ -55,6 +61,7 @@ export function isUsableDevice(device: AdbDeviceDescriptor): boolean {
 export class FakeAdbProvider implements AdbProvider {
   private readonly devices: readonly AdbDeviceDescriptor[];
   private readonly logs = new Map<string, readonly string[]>();
+  private readonly logTails = new Map<string, Set<FakeAdbLogTail>>();
   private readonly sessions = new Map<string, FakeAdbDeviceSession>();
 
   public constructor(devices: readonly AdbDeviceDescriptor[]) {
@@ -69,12 +76,41 @@ export class FakeAdbProvider implements AdbProvider {
     this.logs.set(serial, [...lines]);
   }
 
+  public appendDeviceLog(serial: string, line: string): void {
+    this.logs.set(serial, [...(this.logs.get(serial) ?? []), line]);
+    for (const tail of this.logTails.get(serial) ?? []) {
+      tail.append(line);
+    }
+  }
+
+  public activeLogTails(serial: string): readonly FakeAdbLogTail[] {
+    return [...(this.logTails.get(serial) ?? [])];
+  }
+
   public async readDeviceLogs(serial: string, lines: number): Promise<readonly string[]> {
     const device = this.devices.find((item) => item.serial === serial);
     if (!device || !isUsableDevice(device)) {
       throw new Error(`ADB device is not available: ${serial}`);
     }
     return [...(this.logs.get(serial) ?? [])].slice(-lines);
+  }
+
+  public async tailDeviceLogs(serial: string): Promise<FakeAdbLogTail> {
+    const device = this.devices.find((item) => item.serial === serial);
+    if (!device || !isUsableDevice(device)) {
+      throw new Error(`ADB device is not available: ${serial}`);
+    }
+    const tail = new FakeAdbLogTail(() => {
+      const tails = this.logTails.get(serial);
+      tails?.delete(tail);
+      if (tails?.size === 0) {
+        this.logTails.delete(serial);
+      }
+    });
+    const tails = this.logTails.get(serial) ?? new Set<FakeAdbLogTail>();
+    tails.add(tail);
+    this.logTails.set(serial, tails);
+    return tail;
   }
 
   public async connect(serial: string): Promise<FakeAdbDeviceSession> {
@@ -89,6 +125,54 @@ export class FakeAdbProvider implements AdbProvider {
     const session = new FakeAdbDeviceSession(serial);
     this.sessions.set(serial, session);
     return session;
+  }
+}
+
+export class FakeAdbLogTail implements AdbLogTail {
+  public readonly lines: AsyncIterable<string> = this.createLines();
+  private closed = false;
+  private readonly queue: string[] = [];
+  private readonly waiters: Array<() => void> = [];
+
+  public constructor(private readonly onClose: () => void) {}
+
+  public append(line: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.queue.push(line);
+    this.wake();
+  }
+
+  public async close(): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.onClose();
+    this.wake();
+  }
+
+  private async *createLines(): AsyncIterable<string> {
+    while (!this.closed || this.queue.length > 0) {
+      if (this.queue.length === 0) {
+        // oxlint-disable-next-line no-await-in-loop -- fake tail waits for the next queued log line.
+        await new Promise<void>((resolve) => {
+          this.waiters.push(resolve);
+        });
+        continue;
+      }
+      const line = this.queue.shift();
+      if (line !== undefined) {
+        yield line;
+      }
+    }
+  }
+
+  private wake(): void {
+    for (const waiter of this.waiters.splice(0)) {
+      waiter();
+    }
   }
 }
 

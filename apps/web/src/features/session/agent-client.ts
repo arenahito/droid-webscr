@@ -12,6 +12,7 @@ export interface AgentClient {
   saveRuntimeClipboard?(enabled: boolean): Promise<RuntimeClipboardResult>;
   scanDevices?(): Promise<readonly DeviceDescriptor[]>;
   shareUrl?(): Promise<ShareUrlResult>;
+  tailDeviceLogs?(serial: string, options: DeviceLogTailOptions): Promise<void>;
 }
 
 export interface DeviceActionResult {
@@ -23,6 +24,11 @@ export interface DeviceLogResult {
   readonly lines: readonly string[];
   readonly ok: boolean;
   readonly serial: string;
+}
+
+export interface DeviceLogTailOptions {
+  readonly onLine: (line: string) => void;
+  readonly signal: AbortSignal;
 }
 
 export interface RuntimeConfig {
@@ -104,6 +110,22 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
       }
       return (await response.json()) as DeviceLogResult;
     },
+    tailDeviceLogs: async (serial, tailOptions) => {
+      const response = await fetch(
+        `${baseUrl}/api/devices/${encodeURIComponent(serial)}/logs/tail`,
+        {
+          headers,
+          signal: tailOptions.signal,
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Device log tail failed with HTTP ${response.status}`);
+      }
+      if (!response.body) {
+        throw new Error("Device log tail response did not include a stream");
+      }
+      await readSseLines(response.body, tailOptions.onLine);
+    },
     saveRuntimeBind: async (bindHost, port) =>
       postJson<RuntimeBindResult>(`${baseUrl}/api/config/bind`, { bindHost, port }, headers, {
         method: "PATCH",
@@ -128,6 +150,46 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
       return (await response.json()) as ShareUrlResult;
     },
   };
+}
+
+async function readSseLines(
+  body: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop -- stream chunks must be read sequentially.
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      for (const event of events) {
+        emitSseEvent(event, onLine);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.length > 0) {
+      emitSseEvent(buffer, onLine);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function emitSseEvent(event: string, onLine: (line: string) => void): void {
+  const dataLines = event
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart());
+  if (dataLines.length > 0) {
+    onLine(dataLines.join("\n"));
+  }
 }
 
 function createAgentHeaders(authToken: string | undefined): HeadersInit {

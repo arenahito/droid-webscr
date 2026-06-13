@@ -90,4 +90,21 @@ describe("theme CSS contract", () => {
     expect(sidebarSectionBlock).toContain("gap: 10px");
     expect(accessPanelBlock).toContain("gap: 10px");
   });
+
+  it("styles app scrollbars as a thin shared chrome control", async () => {
+    const css = await readCss();
+    const globalBlock = cssBlock(css, "*");
+    const webkitScrollbarBlock = cssBlock(css, "*::-webkit-scrollbar");
+    const webkitThumbBlock = cssBlock(css, "*::-webkit-scrollbar-thumb");
+    const webkitTrackBlock = cssBlock(css, "*::-webkit-scrollbar-track");
+
+    expect(css).toContain("--color-scrollbar-thumb");
+    expect(css).toContain("--color-scrollbar-track");
+    expect(globalBlock).toContain("scrollbar-color: var(--color-scrollbar-thumb) transparent");
+    expect(globalBlock).toContain("scrollbar-width: thin");
+    expect(webkitScrollbarBlock).toContain("height: 8px");
+    expect(webkitScrollbarBlock).toContain("width: 8px");
+    expect(webkitThumbBlock).toContain("background: var(--color-scrollbar-thumb)");
+    expect(webkitTrackBlock).toContain("background: var(--color-scrollbar-track)");
+  });
 });

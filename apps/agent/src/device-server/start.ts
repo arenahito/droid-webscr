@@ -65,17 +65,26 @@ export class AdbDeviceServer implements DeviceServer {
         frames: socket.chunks,
         serial,
         stop: async () => {
-          await Promise.allSettled([socket?.close(), session?.close()]);
+          await socket?.close().catch(() => undefined);
+          await delay(300);
+          await session?.close().catch(() => undefined);
         },
         write: async (frame) => {
           await socket?.write(frame);
         },
       };
     } catch (error) {
-      await Promise.allSettled([socket?.close(), session?.close()]);
+      await socket?.close().catch(() => undefined);
+      await session?.close().catch(() => undefined);
       throw error;
     }
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

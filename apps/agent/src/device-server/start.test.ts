@@ -41,9 +41,23 @@ describe("ADB device server boundary", () => {
     ]);
     await session.write(new Uint8Array([1]));
     expect(adbSession.sockets[0]?.writes).toEqual([new Uint8Array([1])]);
+    const closeOrder: string[] = [];
+    const socket = adbSession.sockets[0];
+    if (!socket) {
+      throw new Error("Expected a forwarded socket.");
+    }
+    socket.close = async () => {
+      closeOrder.push("socket");
+      socket.closed = true;
+    };
+    adbSession.close = async () => {
+      closeOrder.push("session");
+      adbSession.closed = true;
+    };
     await session.stop();
     expect(adbSession.sockets[0]?.closed).toBe(true);
     expect(adbSession.closed).toBe(true);
+    expect(closeOrder).toEqual(["socket", "session"]);
   });
 
   it("keeps session cleanup idempotent when the forwarded socket is already gone", async () => {

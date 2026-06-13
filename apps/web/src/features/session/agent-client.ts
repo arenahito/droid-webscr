@@ -8,6 +8,8 @@ export interface AgentClient {
   getDeviceLogs?(serial: string, lines?: number): Promise<DeviceLogResult>;
   getRuntimeConfig?(): Promise<RuntimeConfig>;
   listDevices(): Promise<readonly DeviceDescriptor[]>;
+  resetDeviceRotation?(serial: string): Promise<DeviceActionResult>;
+  rotateDevice?(serial: string, direction: "left" | "right"): Promise<DeviceActionResult>;
   saveRuntimeBind?(bindHost: string, port: number): Promise<RuntimeBindResult>;
   saveRuntimeClipboard?(enabled: boolean): Promise<RuntimeClipboardResult>;
   scanDevices?(): Promise<readonly DeviceDescriptor[]>;
@@ -110,6 +112,18 @@ export function createHttpAgentClient(options: HttpAgentClientOptions | string =
       }
       return (await response.json()) as DeviceLogResult;
     },
+    resetDeviceRotation: async (serial) =>
+      postJson<DeviceActionResult>(
+        `${baseUrl}/api/devices/${encodeURIComponent(serial)}/rotation`,
+        { mode: "reset" },
+        headers,
+      ),
+    rotateDevice: async (serial, direction) =>
+      postJson<DeviceActionResult>(
+        `${baseUrl}/api/devices/${encodeURIComponent(serial)}/rotation`,
+        { direction },
+        headers,
+      ),
     tailDeviceLogs: async (serial, tailOptions) => {
       const response = await fetch(
         `${baseUrl}/api/devices/${encodeURIComponent(serial)}/logs/tail`,

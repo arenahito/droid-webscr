@@ -199,6 +199,8 @@ export function DroidWebscrApp({
       }) as React.CSSProperties,
     [logCollapsed, logHeight],
   );
+  const displayScreenSize = getDisplayScreenSize(videoSnapshot, rotation);
+  const displayLandscape = displayScreenSize.width > displayScreenSize.height;
 
   const setControlReady = React.useCallback((ready: boolean) => {
     controlReadyRef.current = ready;
@@ -500,8 +502,12 @@ export function DroidWebscrApp({
   );
 
   const stopSession = React.useCallback(() => {
+    const serial = state.session?.serial ?? state.selectedSerial;
+    if (serial) {
+      void agentClient.resetDeviceRotation?.(serial).catch(() => undefined);
+    }
     finishSession({ closeSocket: true });
-  }, [finishSession]);
+  }, [agentClient, finishSession, state.selectedSerial, state.session?.serial]);
 
   const sendControlFrame = React.useCallback(async (frame: Uint8Array) => {
     if (!controlReadyRef.current) {
@@ -529,6 +535,25 @@ export function DroidWebscrApp({
       sendSystemAction(action);
     },
     [sendSystemAction],
+  );
+
+  const requestRotation = React.useCallback(
+    (delta: number) => {
+      const serial = state.session?.serial ?? state.selectedSerial;
+      if (controlReadyRef.current) {
+        if (serial) {
+          void agentClient
+            .rotateDevice?.(serial, delta < 0 ? "left" : "right")
+            .then((result) => notify(result.message))
+            .catch((error) => {
+              notify(error instanceof Error ? error.message : "Device rotation failed");
+            });
+        }
+        return;
+      }
+      setRotation((current) => (current + delta + 360) % 360);
+    },
+    [agentClient, notify, state.selectedSerial, state.session?.serial],
   );
 
   const sendVideoReconfigure = React.useCallback(
@@ -1033,7 +1058,7 @@ export function DroidWebscrApp({
           />
         )}
         <section className="viewport-grid bg-viewport" ref={viewportRef}>
-          <div className={cn("stage-pair", isLandscapeRotation(rotation) && "is-landscape")}>
+          <div className={cn("stage-pair", displayLandscape && "is-landscape")}>
             <AndroidViewport
               canvasRef={canvasRef}
               device={selectedDevice}
@@ -1056,7 +1081,7 @@ export function DroidWebscrApp({
             />
             <AndroidControls
               sessionActive={controlReady}
-              onRotate={(delta) => setRotation((current) => (current + delta + 360) % 360)}
+              onRotate={requestRotation}
               onSystemAction={requestSystemAction}
             />
           </div>
@@ -1470,8 +1495,8 @@ function AndroidViewport({
   readonly videoSnapshot: VideoPipelineSnapshot | undefined;
 }): React.ReactElement {
   const status = describeVideoStatus(videoSnapshot);
-  const landscape = isLandscapeRotation(rotation);
   const displaySize = getDisplayScreenSize(videoSnapshot, rotation);
+  const landscape = displaySize.width > displaySize.height;
   const phoneStyle = createPhoneStyle(displaySize, viewportSize, landscape);
   return (
     <section aria-label="Android screen viewport" className="stage">

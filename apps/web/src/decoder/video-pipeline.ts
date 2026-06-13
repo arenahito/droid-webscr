@@ -109,7 +109,7 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
           if (!activeDecoder) {
             return snapshot();
           }
-          if (configured && decoded.value.header.type === MessageType.VideoReconfigure) {
+          if (configured) {
             activeDecoder.reset();
             configured = false;
             videoSize = undefined;

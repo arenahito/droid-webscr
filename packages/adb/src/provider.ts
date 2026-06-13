@@ -192,9 +192,9 @@ export class FakeAdbDeviceSession implements AdbDeviceSession {
     this.commands.push([...command]);
     return {
       command,
-      exit: new Promise(() => {}),
-      stderr: Readable.from([]),
-      stdout: Readable.from([new TextEncoder().encode("droid-webscr:ready:droid-webscr\n")]),
+      exit: Promise.resolve(0),
+      stderr: emptyByteStream(),
+      stdout: singleChunkStream("droid-webscr:ready:droid-webscr\n"),
     };
   }
 
@@ -207,6 +207,12 @@ export class FakeAdbDeviceSession implements AdbDeviceSession {
   public async close(): Promise<void> {
     this.closed = true;
   }
+}
+
+async function* emptyByteStream(): AsyncIterable<Uint8Array> {}
+
+async function* singleChunkStream(value: string): AsyncIterable<Uint8Array> {
+  yield new TextEncoder().encode(value);
 }
 
 export class FakeAdbSocket implements AdbSocket {

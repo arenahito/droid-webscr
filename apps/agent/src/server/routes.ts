@@ -132,6 +132,25 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     return { message: `Endpoint ${endpoint} connected`, ok: true };
   });
 
+  const rotationSnapshots = new Map<string, RotationSettings>();
+
+  app.post("/api/devices/:serial/rotation", async (request, reply) => {
+    if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
+      return reply.code(401).send({ error: "Invalid agent auth token" });
+    }
+    const params = request.params as { serial: string };
+    const payload = request.body as { direction?: unknown; mode?: unknown } | undefined;
+    if (payload?.mode === "reset") {
+      await restoreDeviceRotation(context.adbProvider, params.serial, rotationSnapshots);
+      return { message: `Device ${params.serial} rotation reset`, ok: true };
+    }
+    if (payload?.direction !== "left" && payload?.direction !== "right") {
+      return reply.code(400).send({ error: "direction must be left or right" });
+    }
+    await rotateDevice(context.adbProvider, params.serial, payload.direction, rotationSnapshots);
+    return { message: `Device ${params.serial} rotated ${payload.direction}`, ok: true };
+  });
+
   app.get("/api/devices/:serial/logs", async (request, reply) => {
     if (!validateAgentAuthHeader(request.headers.authorization, context.config)) {
       return reply.code(401).send({ error: "Invalid agent auth token" });
@@ -207,6 +226,147 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     const session = await context.sessionManager.create(payload.serial, video);
     return reply.code(201).send(session);
   });
+}
+
+interface RotationSettings {
+  readonly fixedToUserRotation: string;
+  readonly ignoreOrientationRequest: string;
+  readonly userRotation: string;
+}
+
+async function rotateDevice(
+  adbProvider: AdbProvider,
+  serial: string,
+  direction: "left" | "right",
+  snapshots: Map<string, RotationSettings>,
+): Promise<void> {
+  const session = await adbProvider.connect(serial);
+  try {
+    if (!snapshots.has(serial)) {
+      snapshots.set(serial, {
+        fixedToUserRotation: await runShellText(session, [
+          "cmd",
+          "window",
+          "fixed-to-user-rotation",
+        ]),
+        ignoreOrientationRequest: await runShellText(session, [
+          "cmd",
+          "window",
+          "get-ignore-orientation-request",
+        ]),
+        userRotation: await runShellText(session, ["cmd", "window", "user-rotation"]),
+      });
+    }
+    const current = await readDeviceOrientation(session);
+    const delta = direction === "left" ? -1 : 1;
+    const next = (((current + delta) % 4) + 4) % 4;
+    await runShellText(session, ["cmd", "window", "fixed-to-user-rotation", "enabled"]);
+    await runShellText(session, ["cmd", "window", "set-ignore-orientation-request", "true"]);
+    await runShellText(session, ["cmd", "window", "user-rotation", "lock", String(next)]);
+  } finally {
+    await session.close();
+  }
+}
+
+async function restoreDeviceRotation(
+  adbProvider: AdbProvider,
+  serial: string,
+  snapshots: Map<string, RotationSettings>,
+): Promise<void> {
+  const settings = snapshots.get(serial);
+  if (!settings) {
+    return;
+  }
+  snapshots.delete(serial);
+  const session = await adbProvider.connect(serial);
+  try {
+    const locked = parseLockedUserRotation(settings.userRotation);
+    if (locked === undefined) {
+      await runShellText(session, ["cmd", "window", "user-rotation", "free"]);
+    } else {
+      await runShellText(session, ["cmd", "window", "user-rotation", "lock", String(locked)]);
+    }
+    await runShellText(session, [
+      "cmd",
+      "window",
+      "fixed-to-user-rotation",
+      parseFixedToUserRotation(settings.fixedToUserRotation),
+    ]);
+    await runShellText(session, [
+      "cmd",
+      "window",
+      "set-ignore-orientation-request",
+      parseIgnoreOrientationRequest(settings.ignoreOrientationRequest),
+    ]);
+  } finally {
+    await session.close();
+  }
+}
+
+async function readDeviceOrientation(
+  session: Awaited<ReturnType<AdbProvider["connect"]>>,
+): Promise<number> {
+  const userRotation = await runShellText(session, ["cmd", "window", "user-rotation"]);
+  return (
+    parseLockedUserRotation(userRotation) ??
+    parseCurrentOrientation(await runShellText(session, ["dumpsys", "display"])) ??
+    0
+  );
+}
+
+async function runShellText(
+  session: Awaited<ReturnType<AdbProvider["connect"]>>,
+  command: readonly string[],
+): Promise<string> {
+  const process = await session.shell(command);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    collectText(process.stdout),
+    collectText(process.stderr),
+    process.exit,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || `${command.join(" ")} failed with exit code ${exitCode}`);
+  }
+  return stdout.trim();
+}
+
+async function collectText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
+  const decoder = new TextDecoder();
+  let output = "";
+  for await (const chunk of chunks) {
+    output += decoder.decode(chunk, { stream: true });
+  }
+  return output + decoder.decode();
+}
+
+function parseLockedUserRotation(value: string): number | undefined {
+  const match = value.match(/\block\s+([0-3])\b/);
+  return match ? Number.parseInt(match[1]!, 10) : undefined;
+}
+
+function parseCurrentOrientation(value: string): number | undefined {
+  const match = value.match(/\bmCurrentOrientation=([0-3])\b/);
+  return match ? Number.parseInt(match[1]!, 10) : undefined;
+}
+
+function parseFixedToUserRotation(value: string): string {
+  if (value.toLowerCase().includes("enabled")) {
+    return "enabled";
+  }
+  if (value.toLowerCase().includes("disabled")) {
+    return "disabled";
+  }
+  return "default";
+}
+
+function parseIgnoreOrientationRequest(value: string): string {
+  if (value.trim().toLowerCase() === "true") {
+    return "true";
+  }
+  if (value.trim().toLowerCase() === "false") {
+    return "false";
+  }
+  return "reset";
 }
 
 function formatSseData(value: string): string {

@@ -365,6 +365,14 @@ describe("DroidWebscrApp", () => {
       status: "ready",
       videoSize: { height: 1280, width: 720 },
     });
+    const resetDeviceRotation = vi.fn(async () => ({
+      message: "Device emulator-5554 rotation reset",
+      ok: true,
+    }));
+    const rotateDevice = vi.fn(async () => ({
+      message: "Device emulator-5554 rotated right",
+      ok: true,
+    }));
     render(
       <DroidWebscrApp
         client={{
@@ -381,6 +389,8 @@ describe("DroidWebscrApp", () => {
               transportKind: "emulator",
             },
           ],
+          resetDeviceRotation,
+          rotateDevice,
         }}
         sessionSocketFactory={() => new SessionSocket(socket)}
         storage={createMemoryStorage()}
@@ -403,6 +413,7 @@ describe("DroidWebscrApp", () => {
         ?.style.getPropertyValue("--phone-screen-aspect"),
     ).toBe("720 / 1280");
     await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(rotateDevice).toHaveBeenCalledWith("emulator-5554", "right");
     expect(
       document
         .querySelector<HTMLElement>(".phone-shell")
@@ -428,6 +439,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.queryByText("control:home:Accepted")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(resetDeviceRotation).toHaveBeenCalledWith("emulator-5554");
     expect(socket.closed).toBe(true);
     expect(pipeline.closed).toBe(true);
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();

@@ -42,12 +42,12 @@ describe("video pipeline", () => {
     });
   });
 
-  it("resets and reconfigures the decoder from VIDEO_RECONFIGURE", async () => {
+  it("resets and reconfigures the decoder from repeated VIDEO_CONFIG", async () => {
     const adapter = new RecordingVideoDecoderAdapter();
     const pipeline = createVideoPipeline({ createDecoder: () => adapter });
 
     await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
-    await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, [], MessageType.VideoReconfigure));
+    await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, []));
 
     expect(adapter.resetCount).toBe(1);
     expect(adapter.configs.map((config) => [config.codedWidth, config.codedHeight])).toEqual([

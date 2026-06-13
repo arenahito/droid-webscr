@@ -26,6 +26,19 @@ class DisplaySizeTest {
     }
 
     @Test
+    fun `parses current logical display size from window dumpsys`() {
+        val output = """
+            Display: mDisplayId=0
+              init=1080x2400 480dpi cur=2400x1080 app=2400x1080 rng=1080x1008-2400x2280
+            Display: mDisplayId=26
+              init=864x1920 320dpi cur=864x1920 app=864x1920 rng=864x816-1920x1872
+        """.trimIndent()
+
+        assertEquals(DisplaySize(2400, 1080), parseWindowDisplaysCurrentSize(output, displayId = 0))
+        assertEquals(DisplaySize(864, 1920), parseWindowDisplaysCurrentSize(output, displayId = 26))
+    }
+
+    @Test
     fun `ignores invalid wm size output`() {
         assertNull(parseWmSizeOutput("Physical size: 0x1606\n"))
         assertNull(parseWmSizeOutput("Unable to get display size\n"))

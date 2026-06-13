@@ -2,6 +2,7 @@ package dev.droidwebscr.server.session
 
 import android.content.res.Resources
 import android.net.LocalServerSocket
+import android.util.Log
 import dev.droidwebscr.server.capture.CaptureConfig
 import dev.droidwebscr.server.capture.DisplayCaptureBackend
 import dev.droidwebscr.server.capture.ShellDisplayCaptureBackend
@@ -61,61 +62,34 @@ class ProductVerificationServer(
             ),
         )
 
-        val displaySize = readCurrentDisplaySize()
-        val outputSize = displaySize.fitWithin(maxWidth = 1080, maxHeight = 1920)
-        val config = VideoEncoderConfig(
-            width = outputSize.width,
-            height = outputSize.height,
-            bitrate = initialVideoSettings.bitrateMbps * 1_000_000,
-            fps = initialVideoSettings.fps,
-        ).validated()
-        encoder.start(config)
-        val captureSession = captureBackend.start(
-            CaptureConfig(
-                displayId = 0,
-                width = config.width,
-                height = config.height,
-                sourceWidth = displaySize.width,
-                sourceHeight = displaySize.height,
-            ),
-            encoder.inputSurface(),
-        )
-        val videoStream = VideoStreamPump(
+        val videoSession = ActiveVideoSession(
+            captureBackend = captureBackend,
             encoder = encoder,
-            initialConfig = config,
-            writeFrame = frameWriter::writeFrame,
+            frameWriter = frameWriter,
+            inputInjectorFactory = inputInjectorFactory,
+            initialVideoSettings = initialVideoSettings,
         )
         try {
-            videoStream.start()
-            require(videoStream.awaitFirstFrame()) { "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout." }
-            val inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height))
-            val dispatcher = ControlFrameDispatcher(
-                bounds = InputDisplayBounds(config.width, config.height),
-                inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
-                inputInjector = inputInjector,
-                reconfigureVideo = { nextConfig ->
-                    encoder.reconfigure(nextConfig)
-                    videoStream.updateConfig(nextConfig)
-                },
+            videoSession.start(readCurrentDisplaySize())
+            val displayMonitor = DisplaySizeMonitor(
+                readDisplaySize = ::readCurrentDisplaySize,
+                onDisplaySize = videoSession::replaceIfDisplaySizeChanged,
             )
+            displayMonitor.start()
             try {
-                readAndDispatchControls(input, frameWriter, dispatcher)
+                readAndDispatchControls(input, frameWriter, videoSession::dispatch)
             } finally {
-                if (inputInjector is Closeable) {
-                    inputInjector.close()
-                }
+                displayMonitor.stop()
             }
         } finally {
-            videoStream.stop()
-            captureSession.stop()
-            encoder.stop()
+            videoSession.close()
         }
     }
 
     private fun readAndDispatchControls(
         input: InputStream,
         frameWriter: SessionFrameWriter,
-        dispatcher: ControlFrameDispatcher,
+        dispatchFrame: (Frame) -> String,
     ) {
         while (true) {
             val frame = try {
@@ -123,7 +97,7 @@ class ProductVerificationServer(
             } catch (_: EOFException) {
                 return
             }
-            val log = runCatching { dispatcher.dispatch(frame) }
+            val log = runCatching { dispatchFrame(frame) }
                 .getOrElse { error -> "control:rejected:${error.message}" }
             if (shouldWriteAgentLog(log)) {
                 writeLog(frameWriter, log)
@@ -177,6 +151,160 @@ class ProductVerificationServer(
 
     private companion object {
         const val MAX_PAYLOAD_LENGTH_BYTES = 16 * 1024 * 1024
+    }
+}
+
+private class ActiveVideoSession(
+    private val captureBackend: DisplayCaptureBackend,
+    private val encoder: VideoEncoder,
+    private val frameWriter: SessionFrameWriter,
+    private val inputInjectorFactory: (InputDisplayBounds) -> InputInjector,
+    private val initialVideoSettings: InitialVideoSettings,
+) : Closeable {
+    private var active: ActiveSession? = null
+
+    @Synchronized
+    fun start(displaySize: DisplaySize) {
+        require(active == null) { "Video session is already active." }
+        active = createActiveSession(
+            displaySize = displaySize,
+            bitrate = initialVideoSettings.bitrateMbps * 1_000_000,
+            fps = initialVideoSettings.fps,
+        )
+    }
+
+    @Synchronized
+    fun replaceIfDisplaySizeChanged(displaySize: DisplaySize) {
+        val current = active ?: return
+        if (current.displaySize == displaySize) {
+            return
+        }
+        Log.i(TAG, "Display size changed from ${current.displaySize} to $displaySize; restarting capture.")
+        val bitrate = current.config.bitrate
+        val fps = current.config.fps
+        current.close(encoder)
+        active = createActiveSession(displaySize = displaySize, bitrate = bitrate, fps = fps)
+    }
+
+    @Synchronized
+    fun dispatch(frame: Frame): String =
+        active?.dispatcher?.dispatch(frame) ?: "control:rejected:Video session is not ready."
+
+    @Synchronized
+    override fun close() {
+        active?.close(encoder)
+        active = null
+    }
+
+    private fun createActiveSession(displaySize: DisplaySize, bitrate: Int, fps: Int): ActiveSession {
+        val outputSize = displaySize.fitWithin(maxWidth = MAX_VIDEO_SIDE, maxHeight = MAX_VIDEO_SIDE)
+        val config = VideoEncoderConfig(
+            width = outputSize.width,
+            height = outputSize.height,
+            bitrate = bitrate,
+            fps = fps,
+        ).validated()
+        Log.i(TAG, "Starting capture ${config.width}x${config.height} from display $displaySize.")
+        encoder.start(config)
+        val captureSession = captureBackend.start(
+            CaptureConfig(
+                displayId = 0,
+                width = config.width,
+                height = config.height,
+                sourceWidth = displaySize.width,
+                sourceHeight = displaySize.height,
+            ),
+            encoder.inputSurface(),
+        )
+        val videoStream = VideoStreamPump(
+            encoder = encoder,
+            initialConfig = config,
+            writeFrame = frameWriter::writeFrame,
+        )
+        videoStream.start()
+        require(videoStream.awaitFirstFrame()) { "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout." }
+        val inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height))
+        val dispatcher = ControlFrameDispatcher(
+            bounds = InputDisplayBounds(config.width, config.height),
+            inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
+            inputInjector = inputInjector,
+            reconfigureVideo = { nextConfig ->
+                encoder.reconfigure(nextConfig)
+                videoStream.updateConfig(nextConfig)
+            },
+        )
+        return ActiveSession(
+            captureSession = captureSession,
+            config = config,
+            dispatcher = dispatcher,
+            displaySize = displaySize,
+            inputInjector = inputInjector,
+            videoStream = videoStream,
+        )
+    }
+
+    private data class ActiveSession(
+        val captureSession: dev.droidwebscr.server.capture.CaptureSession,
+        val config: VideoEncoderConfig,
+        val dispatcher: ControlFrameDispatcher,
+        val displaySize: DisplaySize,
+        val inputInjector: InputInjector,
+        val videoStream: VideoStreamPump,
+    ) {
+        fun close(encoder: VideoEncoder) {
+            videoStream.stop()
+            runCatching { captureSession.stop() }
+            runCatching { encoder.stop() }
+            val closeableInput = inputInjector as? Closeable
+            if (closeableInput != null) {
+                runCatching { closeableInput.close() }
+            }
+        }
+    }
+
+    private companion object {
+        const val TAG = "droid-webscr"
+        const val MAX_VIDEO_SIDE = 1920
+    }
+}
+
+private class DisplaySizeMonitor(
+    private val readDisplaySize: () -> DisplaySize,
+    private val onDisplaySize: (DisplaySize) -> Unit,
+) {
+    private val running = AtomicBoolean(false)
+    private var worker: Thread? = null
+
+    fun start() {
+        if (!running.compareAndSet(false, true)) {
+            return
+        }
+        worker = Thread(::monitor, "droid-webscr-display-monitor").also { thread ->
+            thread.isDaemon = true
+            thread.start()
+        }
+    }
+
+    fun stop() {
+        running.set(false)
+        val activeWorker = worker
+        worker = null
+        activeWorker?.interrupt()
+        activeWorker?.join(DISPLAY_MONITOR_JOIN_TIMEOUT_MS)
+    }
+
+    private fun monitor() {
+        while (running.get()) {
+            runCatching { onDisplaySize(readDisplaySize()) }
+                .onFailure { error -> Log.w(TAG, "Display size monitor failed.", error) }
+            runCatching { Thread.sleep(DISPLAY_MONITOR_INTERVAL_MS) }
+        }
+    }
+
+    private companion object {
+        const val TAG = "droid-webscr"
+        const val DISPLAY_MONITOR_INTERVAL_MS = 500L
+        const val DISPLAY_MONITOR_JOIN_TIMEOUT_MS = 500L
     }
 }
 
@@ -236,8 +364,10 @@ internal class VideoStreamPump(
 
     fun stop() {
         running.set(false)
-        worker?.interrupt()
+        val activeWorker = worker
         worker = null
+        activeWorker?.interrupt()
+        activeWorker?.join(500)
     }
 
     private fun pump() {
@@ -271,6 +401,8 @@ internal data class DisplaySize(val width: Int, val height: Int) {
 
 private fun readCurrentDisplaySize(): DisplaySize {
     return sequenceOf(
+        { readWindowDumpsysDisplaySize() },
+        { readDisplayManagerLogicalDisplaySize() },
         { readWindowManagerDisplaySize() },
         { readResourcesDisplaySize() },
         { readWmCommandDisplaySize() },
@@ -280,6 +412,28 @@ private fun readCurrentDisplaySize(): DisplaySize {
     }
         ?: error("Unable to determine Android display size.")
 }
+
+private fun readDisplayManagerLogicalDisplaySize(): DisplaySize? = runCatching {
+    val service = Class.forName("android.hardware.display.DisplayManagerGlobal")
+        .getMethod("getInstance")
+        .invoke(null)
+    val displayInfo = service.javaClass.methods.firstOrNull {
+        it.name == "getDisplayInfo" && it.parameterTypes.size == 1
+    }?.invoke(service, 0) ?: return null
+    val infoClass = displayInfo.javaClass
+    val width = infoClass.getField("logicalWidth").getInt(displayInfo)
+    val height = infoClass.getField("logicalHeight").getInt(displayInfo)
+    DisplaySize(width = width, height = height)
+}.getOrNull()
+
+private fun readWindowDumpsysDisplaySize(): DisplaySize? = runCatching {
+    val process = ProcessBuilder("dumpsys", "window", "displays")
+        .redirectError(ProcessBuilder.Redirect.PIPE)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    process.waitFor()
+    parseWindowDisplaysCurrentSize(output, displayId = 0)
+}.getOrNull()
 
 private fun readWindowManagerDisplaySize(): DisplaySize? = runCatching {
     val pointClass = Class.forName("android.graphics.Point")
@@ -316,6 +470,19 @@ internal fun parseWmSizeOutput(output: String): DisplaySize? {
         .firstOrNull { match -> match.groupValues[1] == "Override" }
         .orElse(matches.firstOrNull())
         ?.let { match -> DisplaySize(match.groupValues[2].toInt(), match.groupValues[3].toInt()) }
+        ?.takeIf(DisplaySize::isUsable)
+}
+
+internal fun parseWindowDisplaysCurrentSize(output: String, displayId: Int = 0): DisplaySize? {
+    val displayStart = Regex("""(?m)^\s*Display:\s+mDisplayId=$displayId(?:\D|$)""").find(output) ?: return null
+    val blockEnd = Regex("""(?m)^\s*Display:\s+mDisplayId=""")
+        .find(output, startIndex = displayStart.range.last + 1)
+        ?.range
+        ?.first
+        ?: output.length
+    val displayBlock = output.substring(displayStart.range.first, blockEnd)
+    return Regex("""\bcur=(\d+)x(\d+)\b""").find(displayBlock)
+        ?.let { match -> DisplaySize(match.groupValues[1].toInt(), match.groupValues[2].toInt()) }
         ?.takeIf(DisplaySize::isUsable)
 }
 

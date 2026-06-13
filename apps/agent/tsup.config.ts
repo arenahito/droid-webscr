@@ -1,5 +1,7 @@
 import { defineConfig } from "tsup";
 
+import { workspaceAliases } from "../../tools/vitest-workspace-aliases.js";
+
 export default defineConfig({
   clean: true,
   dts: true,
@@ -9,6 +11,12 @@ export default defineConfig({
     main: "src/main.ts",
   },
   external: ["@fastify/websocket", "fastify", "pino"],
+  esbuildOptions(options) {
+    options.alias = {
+      ...options.alias,
+      ...workspaceAliases,
+    };
+  },
   format: ["esm"],
   noExternal: [/^@droid-webscr\//],
   platform: "node",

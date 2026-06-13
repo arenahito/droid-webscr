@@ -49,8 +49,6 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm android:build
-      - run: pnpm --filter @arenahito/droid-webscr build
       - run: pnpm package:dry-run
       - run: npm publish --provenance --access public
-        working-directory: apps/agent
+        working-directory: apps/cli

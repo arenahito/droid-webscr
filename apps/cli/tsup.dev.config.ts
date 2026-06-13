@@ -4,18 +4,17 @@ import { workspaceAliases } from "../../tools/vitest-workspace-aliases.js";
 
 export default defineConfig({
   clean: true,
-  dts: true,
+  dts: false,
   entry: {
-    index: "src/index.ts",
-    main: "src/main.ts",
+    dev: "src/dev.ts",
   },
-  external: ["@fastify/middie", "@fastify/websocket", "fastify", "pino"],
   esbuildOptions(options) {
     options.alias = {
       ...options.alias,
       ...workspaceAliases,
     };
   },
+  external: ["@fastify/middie", "@fastify/websocket", "fastify", "pino", "vite"],
   format: ["esm"],
   noExternal: [/^@droid-webscr\//],
   platform: "node",

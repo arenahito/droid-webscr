@@ -21,9 +21,9 @@ Run these checks before every commit and fix all errors and warnings:
 
 ## Project-Specific Workflow
 
-- When starting the app for manual verification, run both the web dev server and the agent:
-  - `pnpm dev`
-  - `node apps/agent/dist/main.js`
+- When starting the app for manual verification, run the integrated local runtime:
+  - `pnpm dev:app`
+  - Open `http://127.0.0.1:7391/`
 - Use `.tasks/docs/design/index.html` as the visual source of truth for UI changes.
 - The web UI is not mobile-supported; target desktop and tablet-class viewports only.
 - Verify Android-facing behavior with the emulator, not only unit tests or static inspection.

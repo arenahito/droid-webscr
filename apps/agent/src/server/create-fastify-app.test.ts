@@ -38,6 +38,70 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("serves packaged web assets without taking over API routes", async () => {
+    const app = await createFastifyApp({
+      ...testContext(),
+      webUi: {
+        staticFiles: {
+          "/": { content: '<!doctype html><div id="root"></div>', contentType: "text/html" },
+          "/assets/app.js": {
+            content: "console.log('droid-webscr')",
+            contentType: "text/javascript",
+          },
+        },
+      },
+    });
+
+    const index = await app.inject({ method: "GET", url: "/" });
+    const asset = await app.inject({ method: "GET", url: "/assets/app.js" });
+    const fallback = await app.inject({ method: "GET", url: "/devices/emulator-5554" });
+    const api = await app.inject({ method: "GET", url: "/api/health" });
+    const missingApi = await app.inject({ method: "GET", url: "/api/missing" });
+
+    expect(index.statusCode).toBe(200);
+    expect(index.headers["content-type"]).toContain("text/html");
+    expect(index.body).toContain('<div id="root"></div>');
+    expect(asset.statusCode).toBe(200);
+    expect(asset.headers["content-type"]).toContain("text/javascript");
+    expect(asset.body).toContain("droid-webscr");
+    expect(fallback.statusCode).toBe(200);
+    expect(fallback.body).toContain('<div id="root"></div>');
+    expect(api.statusCode).toBe(200);
+    expect(missingApi.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("delegates development web requests to middleware on the unified server", async () => {
+    const seenUrls: string[] = [];
+    const app = await createFastifyApp({
+      ...testContext(),
+      webUi: {
+        devMiddleware: async (request, response, next) => {
+          seenUrls.push(request.url ?? "");
+          if (request.url === "/src/main.tsx") {
+            response.statusCode = 200;
+            response.setHeader("content-type", "text/javascript");
+            response.end("export default 'hmr'");
+            return;
+          }
+          next();
+        },
+        renderIndex: async (url) => `<!doctype html><title>${url}</title>`,
+      },
+    });
+
+    const moduleResponse = await app.inject({ method: "GET", url: "/src/main.tsx" });
+    const indexResponse = await app.inject({ method: "GET", url: "/" });
+    const apiResponse = await app.inject({ method: "GET", url: "/api/health" });
+
+    expect(moduleResponse.statusCode).toBe(200);
+    expect(moduleResponse.body).toContain("hmr");
+    expect(indexResponse.statusCode).toBe(200);
+    expect(indexResponse.body).toContain("<title>/</title>");
+    expect(apiResponse.statusCode).toBe(200);
+    expect(seenUrls).toContain("/src/main.tsx");
+  });
+
   it("constructs the default device server boundary when none is supplied", async () => {
     const context = testContext();
     const app = await createFastifyApp({ ...context, deviceServer: undefined });
@@ -174,7 +238,7 @@ describe("agent server", () => {
     await app.close();
   });
 
-  it("allows the local web UI origin to reach the current runtime host", async () => {
+  it("allows the same local web UI origin to reach the current runtime host", async () => {
     const context = testContext({
       authToken: "secret",
       bindHost: "127.0.0.1",
@@ -187,7 +251,7 @@ describe("agent server", () => {
       headers: {
         ...headers,
         host: "127.0.0.1:7391",
-        origin: "http://localhost:5173",
+        origin: "http://127.0.0.1:7391",
       },
       method: "GET",
       url: "/api/devices",
@@ -201,12 +265,12 @@ describe("agent server", () => {
     const session = created.json();
 
     expect(response.statusCode).toBe(200);
-    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(response.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:7391");
     const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
       headers: {
         authorization: "Bearer secret",
         host: "127.0.0.1:7391",
-        origin: "http://localhost:5173",
+        origin: "http://127.0.0.1:7391",
         "sec-websocket-protocol": binaryWebSocketProtocol,
       },
     });
@@ -422,7 +486,11 @@ describe("agent server", () => {
     };
     const app = await createFastifyApp(context);
     const responsePromise = app.inject({
-      headers: { authorization: "Bearer secret", origin: "http://localhost:5173" },
+      headers: {
+        authorization: "Bearer secret",
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+      },
       method: "GET",
       url: "/api/devices/emulator-5554/logs/tail",
     });
@@ -438,7 +506,7 @@ describe("agent server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
+    expect(response.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:7391");
     expect(response.body).toContain("data: tail line 1\n\n");
     expect(response.body).toContain("data: tail line 2\n\n");
     expect(historyReads).toBe(0);

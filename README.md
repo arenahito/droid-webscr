@@ -1,8 +1,8 @@
 # droid-webscr
 
-droid-webscr is a local Android screen streaming and control tool. It runs a small
-Node.js agent on your machine, pushes a temporary Android-side server through ADB,
-and opens a browser UI for viewing and controlling an authorized Android device.
+droid-webscr is a local Android screen streaming and control tool. It runs a local
+Node.js server on your machine, pushes a temporary Android-side server through ADB,
+and serves a browser UI for viewing and controlling an authorized Android device.
 
 The project is under active development. Expect CLI and protocol details to keep
 moving until the first stable release.
@@ -44,21 +44,21 @@ droid-webscr
 
 ## Usage
 
-Start the local agent:
+Start the local server and web UI:
 
 ```sh
 droid-webscr
 ```
 
-By default the agent listens on:
+By default the integrated server listens on:
 
 ```text
 http://127.0.0.1:7391
 ```
 
-Open the web UI, select an authorized device, and start a session. The session
+Open the printed URL, select an authorized device, and start a session. The session
 streams the Android display into the browser and sends control frames back to the
-device through the local agent.
+device through the local server.
 
 The UI supports:
 

@@ -2199,10 +2199,7 @@ function browserStorage(): StorageLike {
 
 function shouldUseDesignApiFallback(client: AgentClient | undefined): boolean {
   return (
-    client === undefined &&
-    typeof window !== "undefined" &&
-    window.location.hostname === "localhost" &&
-    window.location.port === "5173"
+    client === undefined && typeof window !== "undefined" && window.location.protocol === "file:"
   );
 }
 

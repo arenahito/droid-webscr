@@ -1,9 +1,14 @@
 import websocket from "@fastify/websocket";
+import middie from "@fastify/middie";
 import { AdbProvider } from "@droid-webscr/adb";
 import { AgentConfig, validateAgentConfig } from "@droid-webscr/config";
 import { encodeFrame } from "@droid-webscr/protocol";
 import { readFrames } from "@droid-webscr/transport";
 import Fastify, { FastifyInstance } from "fastify";
+import { constants } from "node:fs";
+import { access, readFile } from "node:fs/promises";
+import { extname, join, normalize, relative, sep } from "node:path";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { DeviceServer, AdbDeviceServer } from "../device-server/start.js";
 import { isAllowedHost, isAllowedOrigin } from "../security/origin.js";
 import { StartedDeviceSession } from "../session/device-session.js";
@@ -19,10 +24,27 @@ export interface AgentAppContext {
   readonly logger?: boolean | undefined;
   readonly rebindRuntime?: ((bindHost: string, port: number) => Promise<void>) | undefined;
   readonly updateRuntimeConfig?: ((config: AgentConfig) => void) | undefined;
+  readonly webUi?: WebUiProvider | undefined;
 }
 
 export interface AgentFastifyApp extends FastifyInstance {
   closeActiveDeviceSessions(options?: { readonly waitForStartup?: boolean }): Promise<void>;
+}
+
+export type WebMiddleware = (
+  request: IncomingMessage,
+  response: ServerResponse,
+  next: (error?: Error) => void,
+) => void | Promise<void>;
+
+export interface WebUiProvider {
+  readonly close?: (() => Promise<void>) | undefined;
+  readonly devMiddleware?: WebMiddleware | undefined;
+  readonly renderIndex?: ((url: string) => Promise<string>) | undefined;
+  readonly staticFiles?:
+    | Record<string, { readonly content: string; readonly contentType: string }>
+    | undefined;
+  readonly staticRoot?: string | undefined;
 }
 
 export function createLoggerOptions(enabled: boolean | undefined) {
@@ -43,6 +65,12 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
   const app = Fastify({
     logger: createLoggerOptions(context.logger),
   }) as unknown as AgentFastifyApp;
+  if (context.webUi?.devMiddleware) {
+    await app.register(middie);
+    (app as AgentFastifyApp & { use: (middleware: WebMiddleware) => void }).use(
+      context.webUi.devMiddleware,
+    );
+  }
   await app.register(websocket, {
     options: {
       handleProtocols: selectBinaryWebSocketProtocol,
@@ -91,6 +119,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
   app.closeActiveDeviceSessions = closeActiveSessions;
   app.addHook("preClose", async () => {
     await closeActiveSessions({ waitForStartup: true });
+    await context.webUi?.close?.();
   });
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
@@ -261,6 +290,8 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
     },
   );
 
+  registerWebUiRoutes(app, context.webUi);
+
   return app;
 }
 
@@ -287,4 +318,90 @@ function closeBrowserSocket(
   reason: string,
 ): void {
   socket.close?.(code, reason);
+}
+
+function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider | undefined): void {
+  if (!webUi) {
+    return;
+  }
+  app.get("/*", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "/";
+    if (path.startsWith("/api/") || path === "/api" || path.startsWith("/ws/") || path === "/ws") {
+      return reply.code(404).send({ error: "Not found" });
+    }
+    const file = await readWebUiFile(webUi, path);
+    if (file) {
+      return reply.type(file.contentType).send(file.content);
+    }
+    if (webUi.renderIndex) {
+      return reply.type("text/html; charset=utf-8").send(await webUi.renderIndex(request.url));
+    }
+    const index = await readWebUiFile(webUi, "/");
+    if (index) {
+      return reply.type(index.contentType).send(index.content);
+    }
+    return reply.code(404).send({ error: "Not found" });
+  });
+}
+
+async function readWebUiFile(
+  webUi: WebUiProvider,
+  path: string,
+): Promise<{ readonly content: Buffer | string; readonly contentType: string } | undefined> {
+  const staticFile =
+    webUi.staticFiles?.[path] ?? (path === "/" ? webUi.staticFiles?.["/"] : undefined);
+  if (staticFile) {
+    return staticFile;
+  }
+  if (!webUi.staticRoot) {
+    return undefined;
+  }
+  const filePath = resolveStaticFilePath(webUi.staticRoot, path);
+  if (!filePath || !(await isReadableFile(filePath))) {
+    return undefined;
+  }
+  return {
+    content: await readFile(filePath),
+    contentType: contentTypeForPath(filePath),
+  };
+}
+
+function resolveStaticFilePath(root: string, path: string): string | undefined {
+  const normalizedPath = path === "/" ? "/index.html" : path;
+  const decodedPath = decodeURIComponent(normalizedPath);
+  const relativePath = decodedPath.replace(/^\/+/, "");
+  const resolvedPath = normalize(join(root, relativePath));
+  const relativeToRoot = relative(root, resolvedPath);
+  if (relativeToRoot.startsWith("..") || relativeToRoot.includes(`..${sep}`)) {
+    return undefined;
+  }
+  return resolvedPath;
+}
+
+async function isReadableFile(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function contentTypeForPath(path: string): string {
+  switch (extname(path)) {
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".wasm":
+      return "application/wasm";
+    default:
+      return "application/octet-stream";
+  }
 }

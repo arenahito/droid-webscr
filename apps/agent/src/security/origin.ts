@@ -13,13 +13,6 @@ export function isAllowedOrigin(
     if (url.protocol !== "http:") {
       return false;
     }
-    if (
-      requestHost !== undefined &&
-      isLocalDevUiOrigin(url) &&
-      isAllowedHost(requestHost, config)
-    ) {
-      return true;
-    }
     if (!isAllowedHost(url.host, config)) {
       return false;
     }
@@ -73,10 +66,6 @@ function normalizeHost(host: string): string {
 function isLocalHost(host: string): boolean {
   const normalized = normalizeHost(host);
   return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
-}
-
-function isLocalDevUiOrigin(url: URL): boolean {
-  return url.port === "5173" && isLocalHost(url.host);
 }
 
 function samePort(url: URL, host: string): boolean {

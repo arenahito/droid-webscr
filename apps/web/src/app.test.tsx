@@ -173,14 +173,14 @@ describe("DroidWebscrApp", () => {
     expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
   });
 
-  it("uses design fallback devices when the frontend dev server answers API requests", async () => {
+  it("uses design fallback devices only for file-based design previews", async () => {
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
-        hostname: "localhost",
-        port: "5173",
-        protocol: "http:",
+        hostname: "",
+        port: "",
+        protocol: "file:",
       },
     });
     vi.stubGlobal(

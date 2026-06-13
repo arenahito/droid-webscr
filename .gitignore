@@ -12,6 +12,10 @@ coverage/
 apps/agent/LICENSE
 apps/agent/README.md
 apps/agent/android/
+apps/cli/LICENSE
+apps/cli/README.md
+apps/cli/android/
+apps/cli/web/
 
 # Package manager caches
 .npm/

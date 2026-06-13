@@ -1,40 +1,24 @@
 {
-  "name": "@arenahito/droid-webscr",
+  "name": "@droid-webscr/agent",
   "version": "0.1.0",
-  "private": false,
+  "private": true,
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/arenahito/droid-webscr.git",
-    "directory": "apps/agent"
-  },
-  "bin": {
-    "droid-webscr": "dist/bin.js"
-  },
-  "files": [
-    "dist",
-    "android",
-    "README.md",
-    "LICENSE"
-  ],
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "default": "./dist/index.js"
     }
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
-    "build": "tsup && node ../../tools/package-agent.mjs",
+    "build": "tsup",
     "dev": "tsc -p tsconfig.build.json --watch",
     "lint": "oxlint --config ../../oxlint.json src",
     "test": "vitest run",
     "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@fastify/middie": "9.3.2",
     "@fastify/websocket": "11.2.0",
     "fastify": "5.8.5",
     "pino": "10.3.1"
@@ -44,6 +28,7 @@
     "@droid-webscr/config": "workspace:*",
     "@droid-webscr/protocol": "workspace:*",
     "@droid-webscr/transport": "workspace:*",
+    "@types/connect": "^3.4.38",
     "@types/ws": "8.18.1"
   }
 }

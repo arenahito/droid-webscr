@@ -6,16 +6,22 @@ import {
   resolveDeviceServerArtifact,
 } from "./device-server/artifact.js";
 import { AdbDeviceServer } from "./device-server/start.js";
-import { AgentFastifyApp, createFastifyApp } from "./server/create-fastify-app.js";
+import {
+  AgentFastifyApp,
+  createFastifyApp,
+  type WebUiProvider,
+} from "./server/create-fastify-app.js";
 
 export interface AgentRuntime {
   close(): Promise<void>;
+  readonly url: string;
 }
 
 export interface StartAgentOptions {
   readonly adbProvider?: AdbProvider | undefined;
   readonly config?: AgentConfig | undefined;
   readonly deviceServerArtifact?: DeviceServerArtifact | undefined;
+  readonly webUi?: WebUiProvider | undefined;
 }
 
 export async function startAgent(options: StartAgentOptions = {}) {
@@ -38,6 +44,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
       updateRuntimeConfig: (nextConfig) => {
         runtimeConfig = nextConfig;
       },
+      webUi: options.webUi,
     });
 
   const applyRuntimeRebind = async (bindHost: string, port: number) => {
@@ -88,7 +95,16 @@ export async function startAgent(options: StartAgentOptions = {}) {
       await Promise.all(closingPorts.values());
       currentApp = undefined;
     },
+    get url() {
+      return createRuntimeUrl(runtimeConfig.bindHost, runtimeConfig.port);
+    },
   } satisfies AgentRuntime;
+}
+
+export function createRuntimeUrl(bindHost: string, port: number): string {
+  const host = bindHost === "0.0.0.0" || bindHost === "::" ? "127.0.0.1" : bindHost;
+  const formattedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${formattedHost}:${port}`;
 }
 
 export function isDirectRun(moduleUrl: string, argv: readonly string[]): boolean {

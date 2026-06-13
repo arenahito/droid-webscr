@@ -6,16 +6,15 @@ export default defineConfig({
   clean: true,
   dts: true,
   entry: {
-    index: "src/index.ts",
-    main: "src/main.ts",
+    bin: "src/bin.ts",
   },
-  external: ["@fastify/middie", "@fastify/websocket", "fastify", "pino"],
   esbuildOptions(options) {
     options.alias = {
       ...options.alias,
       ...workspaceAliases,
     };
   },
+  external: ["@fastify/middie", "@fastify/websocket", "fastify", "pino", "vite"],
   format: ["esm"],
   noExternal: [/^@droid-webscr\//],
   platform: "node",

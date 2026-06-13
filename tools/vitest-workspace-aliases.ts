@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 export const workspaceAliases = {
   "@droid-webscr/adb": fileURLToPath(new URL("../packages/adb/src/index.ts", import.meta.url)),
+  "@droid-webscr/agent": fileURLToPath(new URL("../apps/agent/src/index.ts", import.meta.url)),
   "@droid-webscr/config": fileURLToPath(
     new URL("../packages/config/src/index.ts", import.meta.url),
   ),

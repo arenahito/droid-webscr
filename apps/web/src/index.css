@@ -846,6 +846,10 @@ select:disabled {
   min-height: 0;
 }
 
+.log-drawer.collapsed {
+  grid-template-rows: 34px;
+}
+
 .drawer-resizer {
   background: transparent;
   cursor: ns-resize;
@@ -880,6 +884,15 @@ select:disabled {
 
 .log-toolbar h2 {
   margin-right: auto;
+}
+
+.log-toolbar .log-collapse-toggle {
+  background: transparent;
+  border-color: transparent;
+  color: var(--control-text);
+  height: 28px;
+  min-width: 28px;
+  width: 28px;
 }
 
 .log-toolbar label,

@@ -1,6 +1,8 @@
 import * as React from "react";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronUp,
   Check,
   Home,
   Menu,
@@ -61,6 +63,7 @@ import webPackageJson from "../package.json" with { type: "json" };
 
 const disconnectedPhoneIconUrl = new URL("./assets/disconnected-phone.png", import.meta.url).href;
 const appVersionLabel = `v${webPackageJson.version}`;
+const collapsedLogHeightPx = 34;
 
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
@@ -159,6 +162,7 @@ export function DroidWebscrApp({
   const [autoscroll, setAutoscroll] = React.useState(true);
   const [wrapLogLines, setWrapLogLines] = React.useState(false);
   const [logHeight, setLogHeight] = React.useState(180);
+  const [logCollapsed, setLogCollapsed] = React.useState(false);
   const [logResizing, setLogResizing] = React.useState(false);
   const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
   const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
@@ -183,8 +187,11 @@ export function DroidWebscrApp({
   const useDesignApiFallback = shouldUseDesignApiFallback(client) && !agentBaseUrl;
   const [viewportRef, viewportSize] = useElementSize<HTMLElement>();
   const appStyle = React.useMemo(
-    () => ({ "--log-height": `${logHeight}px` }) as React.CSSProperties,
-    [logHeight],
+    () =>
+      ({
+        "--log-height": `${logCollapsed ? collapsedLogHeightPx : logHeight}px`,
+      }) as React.CSSProperties,
+    [logCollapsed, logHeight],
   );
 
   const setControlReady = React.useCallback((ready: boolean) => {
@@ -1003,12 +1010,19 @@ export function DroidWebscrApp({
       </div>
       <LogDrawer
         autoscroll={autoscroll}
+        collapsed={logCollapsed}
         emptyMessage={describeDeviceLogEmptyState(state.selectedSerial, deviceLogStatus)}
         level={logLevel}
         logs={deviceLogs}
         resizing={logResizing}
         onAutoscrollChange={setAutoscroll}
         onClear={() => setDeviceLogs([])}
+        onCollapsedChange={(collapsed) => {
+          setLogCollapsed(collapsed);
+          if (collapsed) {
+            setLogResizing(false);
+          }
+        }}
         onLevelChange={setLogLevel}
         onResizeStart={(clientY) => {
           setLogHeightFromClientY(clientY);
@@ -1712,11 +1726,13 @@ function AndroidControls({
 
 function LogDrawer({
   autoscroll,
+  collapsed,
   emptyMessage,
   level,
   logs,
   onAutoscrollChange,
   onClear,
+  onCollapsedChange,
   onLevelChange,
   onResizeStart,
   onWrapLinesChange,
@@ -1724,11 +1740,13 @@ function LogDrawer({
   wrapLines,
 }: {
   readonly autoscroll: boolean;
+  readonly collapsed: boolean;
   readonly emptyMessage: string;
   readonly level: LogLevel;
   readonly logs: readonly string[];
   readonly onAutoscrollChange: (enabled: boolean) => void;
   readonly onClear: () => void;
+  readonly onCollapsedChange: (collapsed: boolean) => void;
   readonly onLevelChange: (level: LogLevel) => void;
   readonly onResizeStart: (clientY: number) => void;
   readonly onWrapLinesChange: (enabled: boolean) => void;
@@ -1748,70 +1766,97 @@ function LogDrawer({
     }
   }, [autoscroll, visibleLogs.length]);
   return (
-    <section aria-label="Device log drawer" className={cn("log-drawer", resizing && "resizing")}>
-      <div
-        aria-label="Resize device log"
-        aria-orientation="horizontal"
-        className={cn("drawer-resizer", resizerHovered && "hovered")}
-        onMouseEnter={() => setResizerHovered(true)}
-        onMouseLeave={() => setResizerHovered(false)}
-        onMouseDown={(event) => {
-          event.preventDefault();
-          onResizeStart(event.clientY);
-        }}
-        onPointerEnter={() => setResizerHovered(true)}
-        onPointerLeave={() => setResizerHovered(false)}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.currentTarget.setPointerCapture?.(event.pointerId);
-          onResizeStart(event.clientY);
-        }}
-        role="separator"
-      />
+    <section
+      aria-label="Device log drawer"
+      className={cn("log-drawer", collapsed && "collapsed", resizing && "resizing")}
+    >
+      {collapsed ? null : (
+        <div
+          aria-label="Resize device log"
+          aria-orientation="horizontal"
+          className={cn("drawer-resizer", resizerHovered && "hovered")}
+          onMouseEnter={() => setResizerHovered(true)}
+          onMouseLeave={() => setResizerHovered(false)}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onResizeStart(event.clientY);
+          }}
+          onPointerEnter={() => setResizerHovered(true)}
+          onPointerLeave={() => setResizerHovered(false)}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            onResizeStart(event.clientY);
+          }}
+          role="separator"
+        />
+      )}
       <div className="log-toolbar">
         <h2>DEVICE LOG</h2>
-        <label>
-          Level
-          <select
-            aria-label="Log level"
-            onChange={(event) => onLevelChange(event.target.value as LogLevel)}
-            value={level}
-          >
-            <option value="all">All</option>
-            <option value="debug">Debug</option>
-            <option value="info">Info</option>
-            <option value="warn">Warn</option>
-            <option value="error">Error</option>
-          </select>
-        </label>
-        <label className="switch">
-          <input
-            checked={autoscroll}
-            onChange={(event) => onAutoscrollChange(event.target.checked)}
-            type="checkbox"
-          />
-          Autoscroll
-        </label>
-        <label className="switch">
-          <input
-            checked={wrapLines}
-            onChange={(event) => onWrapLinesChange(event.target.checked)}
-            type="checkbox"
-          />
-          Wrap lines
-        </label>
-        <Button aria-label="Clear logs" onClick={onClear} size="sm" variant="outline">
-          <Trash2 aria-hidden="true" data-icon="inline-start" />
-          Clear
+        {collapsed ? null : (
+          <>
+            <label>
+              Level
+              <select
+                aria-label="Log level"
+                onChange={(event) => onLevelChange(event.target.value as LogLevel)}
+                value={level}
+              >
+                <option value="all">All</option>
+                <option value="debug">Debug</option>
+                <option value="info">Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+              </select>
+            </label>
+            <label className="switch">
+              <input
+                checked={autoscroll}
+                onChange={(event) => onAutoscrollChange(event.target.checked)}
+                type="checkbox"
+              />
+              Autoscroll
+            </label>
+            <label className="switch">
+              <input
+                checked={wrapLines}
+                onChange={(event) => onWrapLinesChange(event.target.checked)}
+                type="checkbox"
+              />
+              Wrap lines
+            </label>
+            <Button aria-label="Clear logs" onClick={onClear} size="sm" variant="outline">
+              <Trash2 aria-hidden="true" data-icon="inline-start" />
+              Clear
+            </Button>
+          </>
+        )}
+        <Button
+          aria-controls="device-log-lines"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand device log" : "Collapse device log"}
+          className="log-collapse-toggle"
+          onClick={() => onCollapsedChange(!collapsed)}
+          size="icon"
+          title={collapsed ? "Expand device log" : "Collapse device log"}
+          variant="outline"
+        >
+          {collapsed ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
         </Button>
       </div>
-      <div className={cn("log-lines", wrapLines && "wrap-lines")} ref={linesRef}>
-        {visibleLogs.length === 0 ? (
-          <p>{emptyMessage}</p>
-        ) : (
-          visibleLogs.map((log, index) => <LogLine key={`${log}-${index}`} value={log} />)
-        )}
-      </div>
+      {collapsed ? null : (
+        <div
+          className={cn("log-lines", wrapLines && "wrap-lines")}
+          id="device-log-lines"
+          ref={linesRef}
+        >
+          {visibleLogs.length === 0 ? (
+            <p>{emptyMessage}</p>
+          ) : (
+            visibleLogs.map((log, index) => <LogLine key={`${log}-${index}`} value={log} />)
+          )}
+        </div>
+      )}
     </section>
   );
 }

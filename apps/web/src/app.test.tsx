@@ -2057,6 +2057,25 @@ describe("DroidWebscrApp", () => {
       ).toBe("500px"),
     );
     fireEvent.pointerUp(window);
+    await user.click(within(logDrawer).getByRole("button", { name: "Collapse device log" }));
+    expect(within(logDrawer).getByRole("button", { name: "Expand device log" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(
+      document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+    ).toBe("34px");
+    expect(within(logDrawer).queryByRole("separator", { name: "Resize device log" })).toBeNull();
+    expect(within(logDrawer).queryByText("Select a device to view logs")).toBeNull();
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
+    expect(within(logDrawer).getByRole("button", { name: "Collapse device log" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(
+      document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+    ).toBe("500px");
+    expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
 
     expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();

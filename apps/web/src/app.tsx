@@ -157,7 +157,7 @@ export function DroidWebscrApp({
   const [logLevel, setLogLevel] = React.useState<LogLevel>("all");
   const [autoscroll, setAutoscroll] = React.useState(true);
   const [wrapLogLines, setWrapLogLines] = React.useState(false);
-  const [logHeight, setLogHeight] = React.useState(136);
+  const [logHeight, setLogHeight] = React.useState(180);
   const [logResizing, setLogResizing] = React.useState(false);
   const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
   const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
@@ -203,7 +203,7 @@ export function DroidWebscrApp({
 
   const setLogHeightFromClientY = React.useCallback((clientY: number) => {
     const nextHeight = Math.round(window.innerHeight - clientY);
-    setLogHeight(Math.max(88, Math.min(360, nextHeight)));
+    setLogHeight(Math.max(88, Math.min(500, nextHeight)));
   }, []);
 
   React.useEffect(() => {

@@ -2035,6 +2035,9 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).queryByText("Bitrate pressure detected")).not.toBeInTheDocument();
     expect(within(logDrawer).queryByText("Starting stream")).not.toBeInTheDocument();
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 720 });
+    expect(
+      document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+    ).toBe("180px");
     const logResizer = within(logDrawer).getByRole("separator", { name: "Resize device log" });
     fireEvent.pointerEnter(logResizer);
     expect(logResizer).toHaveClass("hovered");
@@ -2046,6 +2049,12 @@ describe("DroidWebscrApp", () => {
       expect(
         document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
       ).toBe("200px"),
+    );
+    fireEvent.pointerMove(window, { clientY: 20 });
+    await waitFor(() =>
+      expect(
+        document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+      ).toBe("500px"),
     );
     fireEvent.pointerUp(window);
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));

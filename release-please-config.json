@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    "apps/agent": {
+      "component": "droid-webscr",
+      "include-component-in-tag": false,
+      "package-name": "@arenahito/droid-webscr",
+      "release-type": "node"
+    }
+  }
+}

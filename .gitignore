@@ -9,6 +9,9 @@ coverage/
 .nuxt/
 .svelte-kit/
 .vite/
+apps/agent/LICENSE
+apps/agent/README.md
+apps/agent/android/
 
 # Package manager caches
 .npm/

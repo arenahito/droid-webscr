@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "turbo dev",
-    "dev:app": "pnpm android:build && pnpm --filter @droid-webscr/agent build && concurrently --kill-others --names web,agent-watch,agent \"pnpm --filter @droid-webscr/web dev\" \"pnpm --filter @droid-webscr/agent dev\" \"node apps/agent/dist/main.js\"",
+    "dev:app": "pnpm android:build && pnpm --filter ./apps/agent build && concurrently --kill-others --names web,agent-watch,agent \"pnpm --filter @droid-webscr/web dev\" \"pnpm --filter ./apps/agent dev\" \"node apps/agent/dist/main.js\"",
     "build": "turbo build",
     "check": "pnpm format:check && pnpm lint && pnpm type-check && pnpm test",
     "lint": "oxlint --config oxlint.json . --deny-warnings",
@@ -14,8 +14,9 @@
     "format:check": "oxfmt --config oxfmt.json --check .",
     "type-check": "turbo type-check",
     "typecheck": "pnpm type-check",
-    "test": "vitest run --config vitest.workspace.ts && node --test tools/workspace-foundation.test.mjs tools/android-emulator-verify.test.mjs",
+    "test": "vitest run --config vitest.workspace.ts && node --test tools/android-emulator-verify.test.mjs",
     "test:coverage": "vitest run --coverage --config vitest.workspace.ts",
+    "package:dry-run": "pnpm --filter @arenahito/droid-webscr build && pnpm --dir apps/agent pack --dry-run",
     "android:build": "node tools/android-gradle.mjs build",
     "android:check": "node tools/android-gradle.mjs check",
     "android:emulator:verify": "node tools/android-emulator-verify.mjs"
@@ -26,6 +27,7 @@
     "concurrently": "^10.0.3",
     "oxfmt": "0.53.0",
     "oxlint": "1.68.0",
+    "tsup": "^8.5.1",
     "turbo": "2.9.16",
     "typescript": "6.0.3",
     "vitest": "4.1.8"

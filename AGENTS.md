@@ -17,7 +17,6 @@ Run these checks before every commit and fix all errors and warnings:
 - `pnpm test`
 - `pnpm android:check`
 - `pnpm android:build`
-- `pnpm android:emulator:verify`
 - `git diff --check`
 
 ## Project-Specific Workflow
@@ -28,3 +27,4 @@ Run these checks before every commit and fix all errors and warnings:
 - Use `.tasks/docs/design/index.html` as the visual source of truth for UI changes.
 - The web UI is not mobile-supported; target desktop and tablet-class viewports only.
 - Verify Android-facing behavior with the emulator, not only unit tests or static inspection.
+- `pnpm android:emulator:verify` is an emulator-backed acceptance check, but it is not a required pre-commit gate because it depends on an online Android emulator.

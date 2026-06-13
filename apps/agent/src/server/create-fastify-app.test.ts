@@ -218,6 +218,14 @@ describe("agent server", () => {
   it("does not reflect arbitrary loopback origins in CORS", async () => {
     const app = await createFastifyApp(testContext());
 
+    const preflight = await app.inject({
+      headers: {
+        host: "127.0.0.1:7391",
+        origin: "http://127.0.0.1:7391",
+      },
+      method: "OPTIONS",
+      url: "/api/devices",
+    });
     const response = await app.inject({
       headers: {
         host: "127.0.0.1:7391",
@@ -227,6 +235,8 @@ describe("agent server", () => {
       url: "/api/devices",
     });
 
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-methods"]).toBe("GET, POST, PATCH, OPTIONS");
     expect(response.statusCode).toBe(403);
     expect(response.headers["access-control-allow-origin"]).toBeUndefined();
     const sameHostDifferentPort = await app.inject({
@@ -644,6 +654,52 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("requires bearer auth on protected HTTP routes when configured", async () => {
+    const app = await createFastifyApp(
+      testContext({
+        authToken: "secret",
+        bindHost: "127.0.0.1",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+    );
+    const cases: Array<{
+      readonly method: "GET" | "PATCH" | "POST";
+      readonly payload?: Record<string, boolean | number | string>;
+      readonly url: string;
+    }> = [
+      { method: "GET", url: "/api/config" },
+      { method: "GET", url: "/api/share-url" },
+      { method: "PATCH", payload: { bindHost: "127.0.0.1", port: 7391 }, url: "/api/config/bind" },
+      { method: "PATCH", payload: { enabled: true }, url: "/api/config/clipboard" },
+      { method: "GET", url: "/api/devices" },
+      { method: "POST", url: "/api/devices/scan" },
+      { method: "POST", payload: { endpoint: "192.168.1.40:5555" }, url: "/api/devices/connect" },
+      {
+        method: "POST",
+        payload: { direction: "right" },
+        url: "/api/devices/emulator-5554/rotation",
+      },
+      { method: "GET", url: "/api/devices/emulator-5554/logs" },
+      { method: "GET", url: "/api/devices/emulator-5554/logs/tail" },
+      { method: "POST", url: "/api/devices/emulator-5554/disconnect" },
+      { method: "POST", payload: { serial: "emulator-5554" }, url: "/api/sessions" },
+    ];
+
+    for (const item of cases) {
+      const options =
+        item.payload === undefined
+          ? { method: item.method, url: item.url }
+          : { method: item.method, payload: item.payload, url: item.url };
+      // oxlint-disable-next-line no-await-in-loop -- each protected route is checked independently.
+      const response = await app.inject(options);
+      expect(response.statusCode, item.url).toBe(401);
+      expect(response.json()).toEqual({ error: "Invalid agent auth token" });
+    }
+
+    await app.close();
+  });
+
   it("validates lifecycle operation payloads", async () => {
     const app = await createFastifyApp(testContext());
 
@@ -658,6 +714,260 @@ describe("agent server", () => {
         })
       ).statusCode,
     ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/devices/emulator-5554/logs?lines=1001",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          payload: {},
+          url: "/api/config/bind",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "PATCH",
+          payload: { bindHost: "127.0.0.1", port: 0 },
+          url: "/api/config/bind",
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          payload: { direction: "upside-down" },
+          url: "/api/devices/emulator-5554/rotation",
+        })
+      ).statusCode,
+    ).toBe(400);
+    await app.close();
+  });
+
+  it("rotates devices and restores the saved Android rotation settings", async () => {
+    const context = testContext();
+    const commands: string[][] = [];
+    let closeCalls = 0;
+    const adbProvider = {
+      ...context.adbProvider,
+      connect: async (serial: string) => ({
+        close: async () => {
+          closeCalls += 1;
+        },
+        openSocket: async (name: string) => {
+          const session = await context.adbProvider.connect(serial);
+          return session.openSocket(name);
+        },
+        push: async () => {},
+        serial,
+        shell: async (command: readonly string[]) => {
+          commands.push([...command]);
+          return {
+            command,
+            exit: Promise.resolve(0),
+            stderr: emptyByteStream(),
+            stdout: singleChunkStream(savedRotationShellOutput(command)),
+          };
+        },
+      }),
+      listDevices: () => context.adbProvider.listDevices(),
+      readDeviceLogs: (serial: string, lines: number) =>
+        context.adbProvider.readDeviceLogs(serial, lines),
+      tailDeviceLogs: (serial: string) => context.adbProvider.tailDeviceLogs(serial),
+    };
+    const app = await createFastifyApp({ ...context, adbProvider });
+
+    const left = await app.inject({
+      method: "POST",
+      payload: { direction: "left" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+    const reset = await app.inject({
+      method: "POST",
+      payload: { mode: "reset" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+
+    expect(left.json()).toEqual({ message: "Device emulator-5554 rotated left", ok: true });
+    expect(reset.json()).toEqual({ message: "Device emulator-5554 rotation reset", ok: true });
+    expect(commands).toEqual([
+      ["cmd", "window", "fixed-to-user-rotation"],
+      ["cmd", "window", "get-ignore-orientation-request"],
+      ["cmd", "window", "user-rotation"],
+      ["cmd", "window", "user-rotation"],
+      ["cmd", "window", "fixed-to-user-rotation", "enabled"],
+      ["cmd", "window", "set-ignore-orientation-request", "true"],
+      ["cmd", "window", "user-rotation", "lock", "1"],
+      ["cmd", "window", "user-rotation", "lock", "2"],
+      ["cmd", "window", "fixed-to-user-rotation", "enabled"],
+      ["cmd", "window", "set-ignore-orientation-request", "false"],
+    ]);
+    expect(closeCalls).toBe(2);
+    await app.close();
+  });
+
+  it("restores unlocked Android rotation settings from alternate shell output", async () => {
+    const context = testContext();
+    const commands: string[][] = [];
+    const adbProvider = {
+      ...context.adbProvider,
+      connect: async (serial: string) => ({
+        close: async () => {},
+        openSocket: async (name: string) => {
+          const session = await context.adbProvider.connect(serial);
+          return session.openSocket(name);
+        },
+        push: async () => {},
+        serial,
+        shell: async (command: readonly string[]) => {
+          commands.push([...command]);
+          return {
+            command,
+            exit: Promise.resolve(0),
+            stderr: emptyByteStream(),
+            stdout: singleChunkStream(unlockedRotationShellOutput(command)),
+          };
+        },
+      }),
+      listDevices: () => context.adbProvider.listDevices(),
+      readDeviceLogs: (serial: string, lines: number) =>
+        context.adbProvider.readDeviceLogs(serial, lines),
+      tailDeviceLogs: (serial: string) => context.adbProvider.tailDeviceLogs(serial),
+    };
+    const app = await createFastifyApp({ ...context, adbProvider });
+
+    await app.inject({
+      method: "POST",
+      payload: { direction: "right" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+    await app.inject({
+      method: "POST",
+      payload: { mode: "reset" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+
+    expect(commands).toEqual([
+      ["cmd", "window", "fixed-to-user-rotation"],
+      ["cmd", "window", "get-ignore-orientation-request"],
+      ["cmd", "window", "user-rotation"],
+      ["cmd", "window", "user-rotation"],
+      ["dumpsys", "display"],
+      ["cmd", "window", "fixed-to-user-rotation", "enabled"],
+      ["cmd", "window", "set-ignore-orientation-request", "true"],
+      ["cmd", "window", "user-rotation", "lock", "0"],
+      ["cmd", "window", "user-rotation", "free"],
+      ["cmd", "window", "fixed-to-user-rotation", "disabled"],
+      ["cmd", "window", "set-ignore-orientation-request", "true"],
+    ]);
+    await app.close();
+  });
+
+  it("falls back to default rotation restore values for unknown shell output", async () => {
+    const context = testContext();
+    const commands: string[][] = [];
+    const adbProvider = {
+      ...context.adbProvider,
+      connect: async (serial: string) => ({
+        close: async () => {},
+        openSocket: async (name: string) => {
+          const session = await context.adbProvider.connect(serial);
+          return session.openSocket(name);
+        },
+        push: async () => {},
+        serial,
+        shell: async (command: readonly string[]) => {
+          commands.push([...command]);
+          return {
+            command,
+            exit: Promise.resolve(0),
+            stderr: emptyByteStream(),
+            stdout: singleChunkStream(unknownRotationShellOutput(command)),
+          };
+        },
+      }),
+      listDevices: () => context.adbProvider.listDevices(),
+      readDeviceLogs: (serial: string, lines: number) =>
+        context.adbProvider.readDeviceLogs(serial, lines),
+      tailDeviceLogs: (serial: string) => context.adbProvider.tailDeviceLogs(serial),
+    };
+    const app = await createFastifyApp({ ...context, adbProvider });
+
+    await app.inject({
+      method: "POST",
+      payload: { direction: "left" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+    await app.inject({
+      method: "POST",
+      payload: { mode: "reset" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+
+    expect(commands.slice(-3)).toEqual([
+      ["cmd", "window", "user-rotation", "free"],
+      ["cmd", "window", "fixed-to-user-rotation", "default"],
+      ["cmd", "window", "set-ignore-orientation-request", "reset"],
+    ]);
+    await app.close();
+  });
+
+  it("ignores rotation reset requests when no rotation snapshot exists", async () => {
+    const app = await createFastifyApp(testContext());
+
+    const response = await app.inject({
+      method: "POST",
+      payload: { mode: "reset" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: "Device emulator-5554 rotation reset", ok: true });
+    await app.close();
+  });
+
+  it("surfaces Android shell errors from rotation operations", async () => {
+    const context = testContext();
+    const adbProvider = {
+      ...context.adbProvider,
+      connect: async (serial: string) => ({
+        close: async () => {},
+        openSocket: async (name: string) => {
+          const session = await context.adbProvider.connect(serial);
+          return session.openSocket(name);
+        },
+        push: async () => {},
+        serial,
+        shell: async (command: readonly string[]) => ({
+          command,
+          exit: Promise.resolve(1),
+          stderr: singleChunkStream("cmd: inaccessible\n"),
+          stdout: emptyByteStream(),
+        }),
+      }),
+      listDevices: () => context.adbProvider.listDevices(),
+      readDeviceLogs: (serial: string, lines: number) =>
+        context.adbProvider.readDeviceLogs(serial, lines),
+      tailDeviceLogs: (serial: string) => context.adbProvider.tailDeviceLogs(serial),
+    };
+    const app = await createFastifyApp({ ...context, adbProvider });
+
+    const response = await app.inject({
+      method: "POST",
+      payload: { direction: "right" },
+      url: "/api/devices/emulator-5554/rotation",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toContain("cmd: inaccessible");
     await app.close();
   });
 
@@ -776,6 +1086,33 @@ describe("agent server", () => {
         headers: { host: "127.0.0.1:7391", origin: "http://127.0.0.1:7391" },
       }),
     ).rejects.toThrow("Unexpected server response: 426");
+
+    expect(
+      (
+        await app.inject({
+          headers: {
+            host: "evil.example",
+            origin: "http://127.0.0.1:7391",
+            "sec-websocket-protocol": binaryWebSocketProtocol,
+          },
+          method: "GET",
+          url: `/ws/session/${session.sessionId}?token=${session.token}`,
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          headers: {
+            host: "127.0.0.1:7391",
+            origin: "http://evil.example",
+            "sec-websocket-protocol": binaryWebSocketProtocol,
+          },
+          method: "GET",
+          url: `/ws/session/${session.sessionId}?token=${session.token}`,
+        })
+      ).statusCode,
+    ).toBe(403);
 
     await app.close();
   });
@@ -907,9 +1244,10 @@ describe("agent server", () => {
 
     ws.terminate();
     releaseStart?.();
-    await app.close();
+    await waitForCondition(() => stopped.length === 1);
 
     expect(stopped).toEqual(["emulator-5554"]);
+    await app.close();
   });
 
   it("keeps the websocket open while waiting for device frames after startup", async () => {
@@ -1066,6 +1404,54 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error("Timed out waiting for condition");
+}
+
+function savedRotationShellOutput(command: readonly string[]): string {
+  if (command.join(" ") === "cmd window fixed-to-user-rotation") {
+    return "enabled\n";
+  }
+  if (command.join(" ") === "cmd window get-ignore-orientation-request") {
+    return "false\n";
+  }
+  if (command.join(" ") === "cmd window user-rotation") {
+    return "lock 2\n";
+  }
+  return "\n";
+}
+
+function unlockedRotationShellOutput(command: readonly string[]): string {
+  if (command.join(" ") === "cmd window fixed-to-user-rotation") {
+    return "disabled\n";
+  }
+  if (command.join(" ") === "cmd window get-ignore-orientation-request") {
+    return "true\n";
+  }
+  if (command.join(" ") === "cmd window user-rotation") {
+    return "free\n";
+  }
+  if (command.join(" ") === "dumpsys display") {
+    return "DisplayInfo{mCurrentOrientation=3}\n";
+  }
+  return "\n";
+}
+
+function unknownRotationShellOutput(command: readonly string[]): string {
+  if (command.join(" ") === "cmd window fixed-to-user-rotation") {
+    return "not supported\n";
+  }
+  if (command.join(" ") === "cmd window get-ignore-orientation-request") {
+    return "unknown\n";
+  }
+  if (command.join(" ") === "cmd window user-rotation") {
+    return "free\n";
+  }
+  return "\n";
+}
+
+async function* emptyByteStream(): AsyncIterable<Uint8Array> {}
+
+async function* singleChunkStream(value: string): AsyncIterable<Uint8Array> {
+  yield new TextEncoder().encode(value);
 }
 
 function testContext(

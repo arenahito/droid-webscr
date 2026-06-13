@@ -25,6 +25,9 @@ describe("DroidWebscrApp", () => {
       <DroidWebscrApp
         client={{
           createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
+          getRuntimeConfig: async () => {
+            throw new Error("runtime config unavailable");
+          },
           listDevices: async () => [],
         }}
         storage={createMemoryStorage()}
@@ -64,6 +67,43 @@ describe("DroidWebscrApp", () => {
     });
   });
 
+  it("observes viewport size with ResizeObserver when the browser provides it", async () => {
+    const observed: Element[] = [];
+    const disconnected: boolean[] = [];
+    class TestResizeObserver {
+      public constructor(private readonly callback: ResizeObserverCallback) {}
+
+      public disconnect(): void {
+        disconnected.push(true);
+      }
+
+      public observe(element: Element): void {
+        observed.push(element);
+        this.callback([], this);
+      }
+
+      public unobserve(): void {
+        return;
+      }
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    const { unmount } = render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
+          listDevices: async () => [],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    expect(observed.length).toBeGreaterThan(0);
+    unmount();
+    expect(disconnected.length).toBeGreaterThan(0);
+    vi.unstubAllGlobals();
+  });
+
   it("builds session websocket URLs from the active agent endpoint", () => {
     expect(createSessionSocketUrl("/ws/session/s1?token=t1", "")).toBe("/ws/session/s1?token=t1");
     expect(createSessionSocketUrl("/ws/session/s1?token=t1", "http://127.0.0.1:7400")).toBe(
@@ -88,8 +128,10 @@ describe("DroidWebscrApp", () => {
     expect(createAgentEndpointUrl("0.0.0.0", 7400, "http://10.0.0.5:7391")).toBe(
       "http://10.0.0.5:7400",
     );
+    expect(createAgentEndpointUrl("0.0.0.0", 7400, "not a url")).toBe("http://192.168.1.20:7400");
     expect(createAgentEndpointUrl("::", 7400)).toBe("http://192.168.1.20:7400");
     expect(createAgentEndpointUrl("127.0.0.1", 7400)).toBe("http://127.0.0.1:7400");
+    expect(createAgentEndpointUrl("127.0.0.1", Number.NaN)).toBe("http://127.0.0.1:7391");
 
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -129,6 +171,38 @@ describe("DroidWebscrApp", () => {
     );
     expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
+  });
+
+  it("uses design fallback devices when the frontend dev server answers API requests", async () => {
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        hostname: "localhost",
+        port: "5173",
+        protocol: "http:",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        headers: new Headers({ "content-type": "text/html" }),
+        ok: true,
+        status: 200,
+      })),
+    );
+
+    render(<DroidWebscrApp storage={createMemoryStorage()} />);
+
+    expect(
+      await screen.findByRole("button", { name: /Pixel 8 Pro 192.168.1.42:5555/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pixel 6a 192.168.1.45:5555/ })).toBeInTheDocument();
+
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
   });
 
   it("renders empty device state and required operational regions", async () => {
@@ -177,6 +251,47 @@ describe("DroidWebscrApp", () => {
         .querySelector<HTMLElement>(".phone-shell")
         ?.style.getPropertyValue("--phone-screen-aspect"),
     ).toBe("9 / 20");
+  });
+
+  it("ignores duplicate start requests while a session is starting", async () => {
+    const user = userEvent.setup();
+    let resolveSession:
+      | ((session: {
+          readonly serial: string;
+          readonly sessionId: string;
+          readonly token: string;
+        }) => void)
+      | undefined;
+    const createSession = vi.fn(
+      async () =>
+        await new Promise<{
+          readonly serial: string;
+          readonly sessionId: string;
+          readonly token: string;
+        }>((resolve) => {
+          resolveSession = resolve;
+        }),
+    );
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession,
+          listDevices: async () => [{ authorizationState: "authorized", serial: "emulator-5554" }],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Android device emulator-5554" }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    resolveSession?.({ serial: "emulator-5554", sessionId: "s-emulator", token: "token-emulator" });
+    socket.open();
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Session s-emulator")).toBeInTheDocument();
   });
 
   it("shows scanning state and refresh errors from the agent", async () => {
@@ -484,6 +599,8 @@ describe("DroidWebscrApp", () => {
     await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
+    socket.receive(new Uint8Array([1]));
+    expect(await screen.findByText("Waiting for Android video configuration")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Volume down" }));
     await user.click(screen.getByRole("button", { name: "Task list" }));
 
@@ -491,6 +608,53 @@ describe("DroidWebscrApp", () => {
     const taskList = decodeFrame(socket.sent[2]!);
     expect(volumeDown.ok && [...volumeDown.value.payload]).toEqual([4]);
     expect(taskList.ok && [...taskList.value.payload]).toEqual([2]);
+  });
+
+  it("reports device rotation failures while a session is connected", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+          rotateDevice: async () => {
+            throw new Error("rotation shell failed");
+          },
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: false,
+            decodedFrames: 0,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "idle",
+            videoSize: undefined,
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await user.click(await screen.findByRole("button", { name: "Rotate right" }));
+
+    expect(await screen.findByText("rotation shell failed")).toBeInTheDocument();
   });
 
   it("returns to the disconnected placeholder when the session socket closes remotely", async () => {
@@ -1010,18 +1174,18 @@ describe("DroidWebscrApp", () => {
 
     fireEvent.pointerDown(canvas, { buttons: 1, clientX: 10, clientY: 50, pointerId: 101 });
     fireEvent.pointerMove(canvas, { buttons: 1, clientX: 90, clientY: 50, pointerId: 101 });
-    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 90, clientY: 50, pointerId: 101 });
+    fireEvent.pointerUp(canvas, { buttons: 0, clientX: 95, clientY: 50, pointerId: 101 });
 
     await waitFor(() => {
-      expect(socket.sent.slice(1).map(decodedType)).toHaveLength(9);
+      expect(socket.sent.slice(1).map(decodedType)).toHaveLength(10);
     });
     const pointerFrames = socket.sent.slice(1).map(decodePointerPayload);
     const buttonStates = socket.sent.slice(1).map(decodePointerButtons);
     const moveFrames = pointerFrames.filter((frame) => frame.action === 1);
     expect(pointerFrames.at(0)).toEqual({ action: 0, pointerId: 0, x: 100, y: 500 });
-    expect(pointerFrames.at(-1)).toEqual({ action: 2, pointerId: 0, x: 900, y: 500 });
-    expect(moveFrames).toHaveLength(7);
-    expect(moveFrames.map((frame) => frame.x)).toEqual([210, 330, 440, 560, 670, 790, 900]);
+    expect(pointerFrames.at(-1)).toEqual({ action: 2, pointerId: 0, x: 950, y: 500 });
+    expect(moveFrames).toHaveLength(8);
+    expect(moveFrames.map((frame) => frame.x)).toEqual([210, 330, 440, 560, 670, 790, 900, 950]);
     expect(buttonStates.at(0)).toBe(1);
     expect(buttonStates.slice(1, -1).every((buttons) => buttons === 1)).toBe(true);
     expect(buttonStates.at(-1)).toBe(0);
@@ -1317,6 +1481,69 @@ describe("DroidWebscrApp", () => {
       { action: 1, pointerId: 1, x: 450, y: 850 },
       { action: 2, pointerId: 1, x: 450, y: 850 },
     ]);
+  });
+
+  it("drops browser pointers when all Android pointer slots are occupied", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1000, width: 1000 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 0,
+        right: 100,
+        toJSON: () => ({}),
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+
+    for (let pointerId = 1; pointerId <= 11; pointerId += 1) {
+      fireEvent.pointerDown(canvas, { buttons: 1, clientX: 50, clientY: 50, pointerId });
+    }
+
+    expect(socket.sent.slice(1).map(decodedType)).toHaveLength(10);
   });
 
   it("turns modified pointer drags into synthetic pinch gestures", async () => {
@@ -2069,6 +2296,10 @@ describe("DroidWebscrApp", () => {
     expect(logResizer).toHaveClass("hovered");
     fireEvent.pointerLeave(logResizer);
     expect(logResizer).not.toHaveClass("hovered");
+    fireEvent.mouseEnter(logResizer);
+    expect(logResizer).toHaveClass("hovered");
+    fireEvent.mouseLeave(logResizer);
+    expect(logResizer).not.toHaveClass("hovered");
     fireEvent.pointerDown(logResizer, { clientY: 584 });
     fireEvent.pointerMove(window, { clientY: 520 });
     await waitFor(() =>
@@ -2083,6 +2314,14 @@ describe("DroidWebscrApp", () => {
       ).toBe("500px"),
     );
     fireEvent.pointerUp(window);
+    fireEvent.mouseDown(logResizer, { clientY: 640 });
+    fireEvent.mouseMove(window, { clientY: 632 });
+    await waitFor(() =>
+      expect(
+        document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
+      ).toBe("88px"),
+    );
+    fireEvent.mouseUp(window);
     await user.click(within(logDrawer).getByRole("button", { name: "Collapse device log" }));
     expect(within(logDrawer).getByRole("button", { name: "Expand device log" })).toHaveAttribute(
       "aria-expanded",
@@ -2100,7 +2339,7 @@ describe("DroidWebscrApp", () => {
     );
     expect(
       document.querySelector<HTMLElement>(".app-shell")?.style.getPropertyValue("--log-height"),
-    ).toBe("500px");
+    ).toBe("88px");
     expect(within(logDrawer).getByText("Select a device to view logs")).toBeInTheDocument();
     await user.click(within(logDrawer).getByRole("button", { name: "Clear logs" }));
 
@@ -2179,6 +2418,10 @@ describe("DroidWebscrApp", () => {
       tailSessions[0]?.onLine("06-09 13:40:01.200  1000  1000 E ErrorTag: error line");
       tailSessions[0]?.onLine("06-09 13:40:01.300  1000  1000 F FatalTag: fatal line");
       tailSessions[0]?.onLine("10:42:10.231 DEBUG app app style debug line");
+      tailSessions[0]?.onLine("10:42:10.232 ERROR app app style error line");
+      tailSessions[0]?.onLine("10:42:10.233 WARN app app style warn line");
+      tailSessions[0]?.onLine("10:42:10.234 INFO app app style info line");
+      tailSessions[0]?.onLine("10:42:10.235 INFO ");
       tailSessions[0]?.onLine("plain unstructured line");
     });
     expect(within(logDrawer).queryByText(/Tail line 1/)).not.toBeInTheDocument();
@@ -2187,8 +2430,8 @@ describe("DroidWebscrApp", () => {
     expect(logLevelSelect).toHaveValue("info");
     expect(within(logDrawer).queryByText(/verbose line/)).not.toBeInTheDocument();
     expect(within(logDrawer).queryByText("debug line")).not.toBeInTheDocument();
-    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
-    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^warn line$/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^error line$/)).toBeInTheDocument();
     await user.selectOptions(logLevelSelect, "all");
     expect(within(logDrawer).getByText(/verbose line/).parentElement).toHaveClass(
       "log-line-level-verbose",
@@ -2202,10 +2445,10 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).getByText("06-09 13:40:01.000")).toHaveClass("log-line-time");
     expect(within(logDrawer).getByText("ActivityTaskManager")).toHaveClass("log-line-area");
     expect(within(logDrawer).getByText("Tail line 1")).toHaveClass("log-line-message");
-    expect(within(logDrawer).getByText(/warn line/).parentElement).toHaveClass(
+    expect(within(logDrawer).getByText(/^warn line$/).parentElement).toHaveClass(
       "log-line-level-warn",
     );
-    expect(within(logDrawer).getByText(/error line/).parentElement).toHaveClass(
+    expect(within(logDrawer).getByText(/^error line$/).parentElement).toHaveClass(
       "log-line-level-error",
     );
     expect(within(logDrawer).getByText(/fatal line/).parentElement).toHaveClass(
@@ -2213,6 +2456,15 @@ describe("DroidWebscrApp", () => {
     );
     expect(within(logDrawer).getByText(/app style debug line/).parentElement).toHaveClass(
       "log-line-level-debug",
+    );
+    expect(within(logDrawer).getByText(/app style error line/).parentElement).toHaveClass(
+      "log-line-level-error",
+    );
+    expect(within(logDrawer).getByText(/app style warn line/).parentElement).toHaveClass(
+      "log-line-level-warn",
+    );
+    expect(within(logDrawer).getByText(/app style info line/).parentElement).toHaveClass(
+      "log-line-level-info",
     );
 
     const wrapToggle = within(logDrawer).getByRole("checkbox", { name: "Wrap lines" });
@@ -2226,20 +2478,20 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).getByText("debug line")).toBeInTheDocument();
     expect(within(logDrawer).getByText(/app style debug line/)).toBeInTheDocument();
     expect(within(logDrawer).getByText(/Tail line 1/)).toBeInTheDocument();
-    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
-    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^warn line$/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^error line$/)).toBeInTheDocument();
     expect(within(logDrawer).getByText(/fatal line/)).toBeInTheDocument();
     expect(within(logDrawer).queryByText(/plain unstructured line/)).not.toBeInTheDocument();
     await user.selectOptions(logLevelSelect, "info");
     expect(within(logDrawer).queryByText("debug line")).not.toBeInTheDocument();
     expect(within(logDrawer).queryByText(/verbose line/)).not.toBeInTheDocument();
     expect(within(logDrawer).getByText(/Tail line 1/)).toBeInTheDocument();
-    expect(within(logDrawer).getByText(/warn line/)).toBeInTheDocument();
-    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^warn line$/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^error line$/)).toBeInTheDocument();
     await user.selectOptions(logLevelSelect, "error");
-    expect(within(logDrawer).getByText(/error line/)).toBeInTheDocument();
+    expect(within(logDrawer).getByText(/^error line$/)).toBeInTheDocument();
     expect(within(logDrawer).getByText(/fatal line/)).toBeInTheDocument();
-    expect(within(logDrawer).queryByText(/warn line/)).not.toBeInTheDocument();
+    expect(within(logDrawer).queryByText(/^warn line$/)).not.toBeInTheDocument();
     await user.selectOptions(logLevelSelect, "all");
 
     const logLines = document.querySelector<HTMLElement>(".log-lines");
@@ -2251,6 +2503,7 @@ describe("DroidWebscrApp", () => {
       ),
     );
     await waitFor(() => expect(logLines?.scrollTop).toBe(1000));
+    fireEvent.scroll(logLines!);
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 150));
     });
@@ -2270,6 +2523,13 @@ describe("DroidWebscrApp", () => {
     );
     expect(await within(logDrawer).findByText("resumed line")).toBeInTheDocument();
     await waitFor(() => expect(logLines?.scrollTop).toBe(1300));
+    const autoscrollToggle = within(logDrawer).getByRole("checkbox", { name: "Autoscroll" });
+    await user.click(autoscrollToggle);
+    fireEvent.scroll(logLines!);
+    act(() =>
+      tailSessions[0]?.onLine("06-09 13:40:01.700  1000  1000 I ActivityTaskManager: manual line"),
+    );
+    expect(await within(logDrawer).findByText("manual line")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
@@ -2310,6 +2570,11 @@ describe("DroidWebscrApp", () => {
     const user = userEvent.setup();
     const storage = createMemoryStorage();
     const socket = new FakeBinaryWebSocket();
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     const saveRuntimeBind = vi.fn(async (bindHost: string, port: number) => ({
       bindHost,
       clipboardEnabled: false,
@@ -2379,12 +2644,16 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByText(/Non-local bind addresses allow/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy share URL" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Apply bind" })).toBeEnabled();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Bind address" }), "0.0.0.0");
+    await user.clear(screen.getByLabelText("Port"));
+    await user.type(screen.getByLabelText("Port"), "7401");
+    expect(screen.getByLabelText("Share URL")).toHaveValue("http://127.0.0.1:7401");
+    await user.click(screen.getByRole("button", { name: "Copy share URL" }));
+    expect(writeText).toHaveBeenCalledWith("http://127.0.0.1:7401");
+    expect(await screen.findByText("Share URL copied")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Apply bind" }));
-    expect(saveRuntimeBind).toHaveBeenCalledWith("127.0.0.1", 7391);
-    expect(
-      await screen.findByText("Agent is now listening on 127.0.0.1:7391."),
-    ).toBeInTheDocument();
-    expect(storage.getItem("droid-webscr.agentEndpoint")).toBe("http://127.0.0.1:7391");
+    expect(saveRuntimeBind).toHaveBeenCalledWith("0.0.0.0", 7401);
+    expect(await screen.findByText("Agent is now listening on 0.0.0.0:7401.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Bind" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -2394,13 +2663,131 @@ describe("DroidWebscrApp", () => {
 
     expect(screen.getByRole("button", { name: "Power" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Rotate right" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("20 / 9");
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(document.querySelector<HTMLElement>(".phone-shell")).toHaveClass("rotation-180");
+    await user.click(screen.getByRole("button", { name: "Rotate left" }));
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("20 / 9");
+    await user.click(screen.getByRole("button", { name: "Rotate left" }));
+    expect(
+      document
+        .querySelector<HTMLElement>(".phone-shell")
+        ?.style.getPropertyValue("--phone-screen-aspect"),
+    ).toBe("9 / 20");
     await user.click(screen.getByRole("button", { name: "Start" }));
     expect(screen.getByRole("button", { name: "Power" })).toBeDisabled();
     socket.open();
     await user.click(await screen.findByRole("button", { name: "Power" }));
     expect(screen.getByRole("dialog", { name: "Power action" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send power" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Send power" }));
+    const power = decodeFrame(socket.sent[1]!);
+    expect(power.ok && power.value.header.type).toBe(MessageType.ControlSystem);
+    expect(power.ok && [...power.value.payload]).toEqual([5]);
+  });
+
+  it("connects to a typed ADB endpoint from the access dialog", async () => {
+    const user = userEvent.setup();
+    const connectEndpoint = vi.fn();
+    const scanDevices = vi.fn(async () => [
+      {
+        authorizationState: "authorized" as const,
+        model: "Pixel 8",
+        serial: "192.168.1.40:5555",
+        transportKind: "network" as const,
+      },
+    ]);
+    render(
+      <DroidWebscrApp
+        client={{
+          connectEndpoint,
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "192.168.1.40:5555",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [],
+          scanDevices,
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connect by endpoint" }));
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    expect(connectEndpoint).not.toHaveBeenCalled();
+    await user.type(screen.getByPlaceholderText("192.168.1.40:5555"), "192.168.1.40:5555");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(connectEndpoint).toHaveBeenCalledWith("192.168.1.40:5555");
+    expect(scanDevices).toHaveBeenCalled();
+    expect(await screen.findByText("Endpoint connected")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /Pixel 8 192.168.1.40:5555/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows dialog operation errors without closing the dialog", async () => {
+    const user = userEvent.setup();
+    render(
+      <DroidWebscrApp
+        client={{
+          connectEndpoint: async () => {
+            throw new Error("adb connect failed");
+          },
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "192.168.1.40:5555",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connect by endpoint" }));
+    await user.type(screen.getByPlaceholderText("192.168.1.40:5555"), "192.168.1.40:5555");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Connect by endpoint" })).toBeInTheDocument(),
+    );
+  });
+
+  it("reports unavailable device log tail support", async () => {
+    const user = userEvent.setup();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [{ authorizationState: "authorized", serial: "emulator-5554" }],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    const logDrawer = await screen.findByRole("region", { name: "Device log drawer" });
+    await user.click(within(logDrawer).getByRole("button", { name: "Expand device log" }));
+    await user.click(within(logDrawer).getByRole("button", { name: "Start log" }));
+
+    expect(await screen.findByText("Device log tail is unavailable")).toBeInTheDocument();
+    expect(within(logDrawer).getByText("Device log tail unavailable")).toBeInTheDocument();
   });
 
   it("hides clipboard controls while preserving runtime config compatibility", async () => {
@@ -2442,6 +2829,7 @@ describe("DroidWebscrApp", () => {
   it("matches the design interaction contract for device menus and adb scanning", async () => {
     const user = userEvent.setup();
     const createdSessions: string[] = [];
+    const disconnectedSerials: string[] = [];
     const getDeviceLogs = vi.fn();
     const socket = new FakeBinaryWebSocket();
     let scanCalls = 0;
@@ -2455,6 +2843,10 @@ describe("DroidWebscrApp", () => {
               serial,
               token: "token-emulator",
             };
+          },
+          disconnectDevice: async (serial) => {
+            disconnectedSerials.push(serial);
+            return { message: `Disconnected ${serial}`, ok: true };
           },
           getDeviceLogs,
           listDevices: async () => [
@@ -2507,6 +2899,10 @@ describe("DroidWebscrApp", () => {
     ).not.toBeInTheDocument();
     expect(getDeviceLogs).not.toHaveBeenCalled();
     expect(within(menu).queryByRole("menuitem", { name: "Rename device" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    menu = screen.getByRole("menu");
 
     await user.click(within(menu).getByRole("menuitem", { name: "Start session" }));
     expect(createdSessions).toEqual(["R5CW70ABC12"]);
@@ -2514,8 +2910,12 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByText("Session s-R5CW70ABC12")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    menu = screen.getByRole("menu");
+    await user.click(within(menu).getByRole("menuitem", { name: "Disconnect" }));
+    expect(disconnectedSerials).toEqual(["R5CW70ABC12"]);
     await user.click(screen.getByRole("button", { name: "Refresh devices" }));
-    expect(scanCalls).toBe(1);
+    expect(scanCalls).toBe(2);
     expect(await screen.findByText("Devices refreshed")).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });

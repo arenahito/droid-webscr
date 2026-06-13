@@ -149,6 +149,15 @@ describe("session socket", () => {
     );
   });
 
+  it("validates an already open socket before resolving", async () => {
+    const socket = new FakeBinaryWebSocket("legacy-json");
+    socket.readyState = 1;
+
+    await expect(new SessionSocket(socket).waitUntilOpen()).rejects.toThrow(
+      "Unsupported WebSocket protocol negotiated: legacy-json",
+    );
+  });
+
   it("resolves and rejects real open lifecycle outcomes", async () => {
     const accepted = new FakeBinaryWebSocket();
     const connected = new SessionSocket(accepted).waitUntilOpen();

@@ -36,6 +36,11 @@ describe("startAgent", () => {
       headers: { "content-type": "application/json" },
       method: "PATCH",
     });
+    const noOpRebind = await fetch(`http://localhost:${port}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "localhost", port }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
     await fetch(`http://localhost:${port}/api/config/clipboard`, {
       body: JSON.stringify({ enabled: true }),
       headers: { "content-type": "application/json" },
@@ -49,6 +54,7 @@ describe("startAgent", () => {
     const config = await fetch(`http://127.0.0.1:${secondPort}/api/config`);
 
     expect(rebind.status).toBe(200);
+    expect(noOpRebind.status).toBe(200);
     expect(await config.json()).toEqual({
       bindHost: "127.0.0.1",
       clipboardEnabled: true,
@@ -94,6 +100,35 @@ describe("startAgent", () => {
 
     await runtime.close();
   });
+
+  it("keeps the current listener alive when rebinding to an occupied port fails", async () => {
+    const firstPort = await getOpenPort();
+    const occupiedPort = await getOpenPort();
+    const blocker = net.createServer();
+    await listen(blocker, occupiedPort);
+    const runtime = await startAgent({
+      adbProvider: new FakeAdbProvider([]),
+      config: {
+        authToken: undefined,
+        bindHost: "127.0.0.1",
+        clipboard: { enabled: false },
+        port: firstPort,
+      },
+    });
+
+    const failed = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
+      body: JSON.stringify({ bindHost: "127.0.0.1", port: occupiedPort }),
+      headers: { "content-type": "application/json" },
+      method: "PATCH",
+    });
+    const health = await fetch(`http://127.0.0.1:${firstPort}/api/health`);
+
+    expect(failed.status).toBe(500);
+    expect(health.status).toBe(200);
+
+    await runtime.close();
+    await closeServer(blocker);
+  });
 });
 
 async function getOpenPort(): Promise<number> {
@@ -113,6 +148,25 @@ async function getOpenPort(): Promise<number> {
         }
         resolve(address.port);
       });
+    });
+  });
+}
+
+async function listen(server: net.Server, port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+}
+
+async function closeServer(server: net.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
     });
   });
 }

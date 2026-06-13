@@ -36,4 +36,22 @@ describe("session state", () => {
     expect(failed.phase).toBe("error");
     expect(failed.logs).toEqual(["Security error: Invalid origin"]);
   });
+
+  it("clears logs and leaves unknown errors unprefixed", () => {
+    const state = {
+      logs: ["old"],
+      phase: "connected" as const,
+      selectedSerial: "s1",
+      session: undefined,
+    };
+
+    expect(reduceSessionState(state, { type: "clear-logs" }).logs).toEqual([]);
+    expect(
+      reduceSessionState(state, {
+        domain: "unknown",
+        message: "Unexpected close",
+        type: "failed",
+      }).logs.at(-1),
+    ).toBe("Unexpected close");
+  });
 });

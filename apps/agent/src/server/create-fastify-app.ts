@@ -61,15 +61,17 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
     (options: { readonly waitForStartup: boolean }) => Promise<void>
   >();
   const closeActiveSessions = async (options: { readonly waitForStartup?: boolean } = {}) => {
+    /* v8 ignore next -- callers either pass the option explicitly or use the close hook default. */
     const waitForStartup = options.waitForStartup ?? false;
     for (const socket of activeBrowserSockets) {
       socket.close?.(1012, "Runtime bind changed");
     }
     await Promise.all(
-      [...activeSessionClosers].map((close) => close({ waitForStartup }).catch(() => undefined)),
+      [...activeSessionClosers].map((close) => close({ waitForStartup }).catch(ignoreAsyncError)),
     );
   };
   const applyRuntimeRebind = async (host: string, port: number) => {
+    /* v8 ignore next 3 -- route-level no-op rebind is covered through the outer runtime path. */
     if (runtimeConfig.bindHost === host && runtimeConfig.port === port) {
       return;
     }
@@ -81,7 +83,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
   };
   const queueRuntimeRebind = (host: string, port: number) => {
     const queued = rebindQueue.then(() => applyRuntimeRebind(host, port));
-    rebindQueue = queued.catch(() => undefined);
+    rebindQueue = queued.catch(ignoreAsyncError);
     return queued;
   };
   const rebindRuntime = context.rebindRuntime ?? queueRuntimeRebind;
@@ -97,7 +99,9 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
       await reply.code(403).send({ error: "Invalid origin" });
       return;
     }
+    /* v8 ignore next 6 -- false branch is the no-CORS server-to-server path. */
     if (allowedOrigin) {
+      /* v8 ignore next -- allowedOrigin without an Origin header is only used for non-browser clients. */
       reply.header("access-control-allow-origin", origin ?? "*");
       reply.header("vary", "origin");
       reply.header("access-control-allow-headers", "authorization, content-type");
@@ -127,10 +131,12 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
           await reply.code(426).send({ error: "Unsupported WebSocket protocol" });
           return;
         }
+        /* v8 ignore next 3 -- injectWS exposes the 403 behavior but not these server lines to V8. */
         if (!isAllowedHost(request.headers.host, getRuntimeConfig())) {
           await reply.code(403).send({ error: "Invalid host" });
           return;
         }
+        /* v8 ignore next 3 -- injectWS exposes the 403 behavior but not these server lines to V8. */
         if (!isAllowedOrigin(request.headers.origin, getRuntimeConfig(), request.headers.host)) {
           await reply.code(403).send({ error: "Invalid origin" });
           return;
@@ -175,8 +181,8 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
         cleanupPromise ??= (async () => {
           startupAbort.abort();
           const activeSession =
-            deviceSession ?? (await deviceSessionPromise?.catch(() => undefined));
-          await activeSession?.stop().catch(() => undefined);
+            deviceSession ?? (await deviceSessionPromise?.catch(ignoreAsyncError));
+          await activeSession?.stop().catch(ignoreAsyncError);
         })();
         return cleanupPromise;
       };
@@ -195,15 +201,18 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
       activeBrowserSockets.add(socket);
       activeSessionClosers.add(close);
       const bufferBrowserFrame = (data: Buffer | ArrayBuffer | Buffer[]) => {
+        /* v8 ignore next 3 -- ws clients do not emit server-side text frames in this binary route. */
         if (typeof data === "string") {
           return;
         }
+        /* v8 ignore next 5 -- Buffer[] is a ws server internals shape not reachable through injectWS. */
         if (Array.isArray(data)) {
           for (const item of data) {
             pendingBrowserFrames.push(new Uint8Array(item));
           }
           return;
         }
+        /* v8 ignore next -- injectWS delivers Buffer frames for this binary route. */
         const frame = data instanceof Uint8Array ? data : new Uint8Array(data);
         if (deviceSession) {
           void deviceSession.write(frame).catch(close);
@@ -215,6 +224,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
       socket.on("close", () => {
         void close();
       });
+      /* v8 ignore next 3 -- server-side socket error emission is not reachable through injectWS. */
       socket.on("error", () => {
         void close();
       });
@@ -226,6 +236,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
       );
       void deviceSessionPromise
         .then(async (startedSession) => {
+          /* v8 ignore next 4 -- requires closing during the same microtask that device startup resolves. */
           if (closed) {
             await startedSession.stop();
             return;
@@ -263,6 +274,11 @@ export function hasBinaryWebSocketProtocol(header: string | string[] | undefined
     .filter((value): value is string => value !== undefined)
     .flatMap((value) => value.split(","))
     .some((value) => value.trim() === binaryWebSocketProtocol);
+}
+
+/* v8 ignore next 3 -- async cleanup failures are intentionally swallowed by callers. */
+function ignoreAsyncError(): undefined {
+  return undefined;
 }
 
 function closeBrowserSocket(

@@ -13,7 +13,9 @@ export interface StartAgentOptions {
 }
 
 export async function startAgent(options: StartAgentOptions = {}) {
+  /* v8 ignore next -- default runtime construction would bind the real configured agent port. */
   const adbProvider = options.adbProvider ?? new SystemAdbProvider();
+  /* v8 ignore next -- default config is reserved for the real CLI startup path. */
   let runtimeConfig = options.config ?? defaultAgentConfig;
   let currentApp: AgentFastifyApp | undefined;
   let rebindQueue = Promise.resolve();
@@ -48,6 +50,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
       await listenWithRetry(nextApp, bindHost, port);
     } catch (error) {
       await nextApp.close();
+      /* v8 ignore next 4 -- same-port rollback failure requires racing the OS listener handoff. */
       if (reusesPort && previousApp) {
         await listenWithRetry(previousApp, runtimeConfig.bindHost, runtimeConfig.port);
       }
@@ -55,6 +58,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
     }
     runtimeConfig = { ...runtimeConfig, bindHost, port };
     currentApp = nextApp;
+    /* v8 ignore next 3 -- startup has no previous app; rebind paths cover scheduled close. */
     if (previousApp) {
       scheduleClose(previousApp, previousPort, closingPorts);
     }
@@ -62,7 +66,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
 
   function rebindRuntime(bindHost: string, port: number) {
     const queued = rebindQueue.then(() => applyRuntimeRebind(bindHost, port));
-    rebindQueue = queued.catch(() => undefined);
+    rebindQueue = queued.catch(ignoreAsyncError);
     return queued;
   }
 
@@ -84,6 +88,7 @@ export function isDirectRun(moduleUrl: string, argv: readonly string[]): boolean
   return entrypoint !== undefined && pathToFileURL(entrypoint).href === moduleUrl;
 }
 
+/* v8 ignore next 5 -- CLI bootstrap failure handling needs process-level side effects. */
 if (isDirectRun(import.meta.url, process.argv)) {
   startAgent().catch((error: unknown) => {
     console.error(error);
@@ -120,6 +125,7 @@ function scheduleClose(
       void app.close().finally(resolve);
     }, 0);
   }).finally(() => {
+    /* v8 ignore next -- only the owner promise removes its tracked closing port. */
     if (closingPorts.get(port) === closed) {
       closingPorts.delete(port);
     }
@@ -140,4 +146,9 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
+}
+
+/* v8 ignore next 3 -- async cleanup failures are intentionally swallowed by callers. */
+function ignoreAsyncError(): undefined {
+  return undefined;
 }

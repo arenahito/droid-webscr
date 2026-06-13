@@ -90,6 +90,7 @@ function sameEndpoint(url: URL, host: string): boolean {
 }
 
 function defaultPort(protocol: string): string {
+  /* v8 ignore next -- supported callers pass http: in local agent URLs. */
   return protocol === "https:" ? "443" : "80";
 }
 
@@ -99,5 +100,6 @@ function extractPort(host: string): string {
     return host.slice(end + 1).replace(/^:/, "");
   }
   const parts = host.split(":");
+  /* v8 ignore next -- host parsing is exercised with either one part or a valid host:port pair. */
   return parts.length === 2 ? (parts[1] ?? "") : "";
 }

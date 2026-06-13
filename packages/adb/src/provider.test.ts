@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AdbAuthorizationState,
   AdbTransportKind,
+  FakeAdbLogTail,
   FakeAdbProvider,
   SystemAdbProvider,
   buildLocalAbstractForward,
@@ -51,6 +52,19 @@ describe("ADB provider contract", () => {
     expect(process.command).toEqual(["app_process", "/", "dev.droidwebscr.server.Main"]);
   });
 
+  it("reuses fake sessions and records socket writes", async () => {
+    const provider = new FakeAdbProvider([device("emulator-5554")]);
+
+    const first = await provider.connect("emulator-5554");
+    const second = await provider.connect("emulator-5554");
+    const socket = await first.openSocket("localabstract:droid-webscr");
+    await socket.write(new Uint8Array([7, 8]));
+
+    expect(second).toBe(first);
+    expect(first.sockets).toHaveLength(1);
+    expect(first.sockets[0]?.writes).toEqual([new Uint8Array([7, 8])]);
+  });
+
   it("tails fake device logs until the stream is closed", async () => {
     const provider = new FakeAdbProvider([device("emulator-5554")]);
     const tail = await provider.tailDeviceLogs("emulator-5554");
@@ -60,6 +74,31 @@ describe("ADB provider contract", () => {
     await expect(iterator.next()).resolves.toEqual({ done: false, value: "tail line 1" });
 
     await tail.close();
+    provider.appendDeviceLog("emulator-5554", "ignored after close");
+    await tail.close();
+    await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
+    expect(provider.activeLogTails("emulator-5554")).toEqual([]);
+  });
+
+  it("wakes pending fake log tail readers when a line arrives", async () => {
+    const provider = new FakeAdbProvider([device("emulator-5554")]);
+    const tail = await provider.tailDeviceLogs("emulator-5554");
+    const iterator = tail.lines[Symbol.asyncIterator]();
+    const pendingLine = iterator.next();
+
+    provider.appendDeviceLog("emulator-5554", "late line");
+
+    await expect(pendingLine).resolves.toEqual({ done: false, value: "late line" });
+    await tail.close();
+  });
+
+  it("ignores appends after a fake log tail has closed", async () => {
+    const tail = new FakeAdbLogTail(() => {});
+    const iterator = tail.lines[Symbol.asyncIterator]();
+
+    await tail.close();
+    tail.append("ignored");
+
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 
@@ -68,6 +107,9 @@ describe("ADB provider contract", () => {
 
     await expect(provider.connect("offline-1")).rejects.toThrow("ADB device is not available");
     await expect(provider.connect("missing")).rejects.toThrow("ADB device is not available");
+    await expect(provider.readDeviceLogs("offline-1", 1)).rejects.toThrow(
+      "ADB device is not available",
+    );
     await expect(provider.tailDeviceLogs("offline-1")).rejects.toThrow(
       "ADB device is not available",
     );

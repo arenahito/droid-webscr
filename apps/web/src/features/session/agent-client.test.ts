@@ -117,6 +117,14 @@ describe("HTTP agent client", () => {
       ok: true,
       serial: "emulator-5554",
     });
+    await expect(client.resetDeviceRotation?.("emulator-5554")).resolves.toEqual({
+      message: "ok",
+      ok: true,
+    });
+    await expect(client.rotateDevice?.("emulator-5554", "right")).resolves.toEqual({
+      message: "ok",
+      ok: true,
+    });
     await expect(client.disconnectDevice?.("emulator-5554")).resolves.toEqual({
       message: "ok",
       ok: true,
@@ -223,16 +231,31 @@ describe("HTTP agent client", () => {
   });
 
   it("throws clear errors for failed agent responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status: 503 })),
-    );
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
     const client = createHttpAgentClient();
 
     await expect(client.listDevices()).rejects.toThrow("Device listing failed with HTTP 503");
     await expect(
       client.createSession("emulator-5554", { bitrateMbps: 4, fps: 30 }),
     ).rejects.toThrow("Session creation failed with HTTP 503");
+    await expect(client.getRuntimeConfig?.()).rejects.toThrow(
+      "Runtime config failed with HTTP 503",
+    );
+    await expect(client.getDeviceLogs?.("emulator-5554")).rejects.toThrow(
+      "Device logs failed with HTTP 503",
+    );
+    await expect(
+      client.tailDeviceLogs?.("emulator-5554", {
+        onLine: () => {},
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Device log tail failed with HTTP 503");
+    await expect(client.scanDevices?.()).rejects.toThrow("Device scan failed with HTTP 503");
+    await expect(client.shareUrl?.()).rejects.toThrow("Share URL failed with HTTP 503");
+    await expect(client.connectEndpoint?.("192.168.1.40:5555")).rejects.toThrow(
+      "Agent request failed with HTTP 503",
+    );
   });
 
   it("rejects non-json device responses from a frontend dev server", async () => {
@@ -249,6 +272,51 @@ describe("HTTP agent client", () => {
     await expect(client.listDevices()).rejects.toThrow(
       "Agent API did not return a device JSON response",
     );
+  });
+
+  it("rejects log tail responses without a stream body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        body: null,
+        ok: true,
+        status: 200,
+      })),
+    );
+    const client = createHttpAgentClient();
+
+    await expect(
+      client.tailDeviceLogs?.("emulator-5554", {
+        onLine: () => {},
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Device log tail response did not include a stream");
+  });
+
+  it("emits a final unterminated SSE event", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: final line"));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        body,
+        ok: true,
+        status: 200,
+      })),
+    );
+    const client = createHttpAgentClient();
+    const lines: string[] = [];
+
+    await client.tailDeviceLogs?.("emulator-5554", {
+      onLine: (line) => lines.push(line),
+      signal: new AbortController().signal,
+    });
+
+    expect(lines).toEqual(["final line"]);
   });
 });
 

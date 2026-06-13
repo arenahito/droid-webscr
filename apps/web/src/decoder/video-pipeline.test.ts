@@ -47,13 +47,16 @@ describe("video pipeline", () => {
     const pipeline = createVideoPipeline({ createDecoder: () => adapter });
 
     await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, [1, 0, 0, 0, 0, 0, 0]));
     await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, []));
 
-    expect(adapter.resetCount).toBe(1);
+    expect(adapter.resetCount).toBe(2);
     expect(adapter.configs.map((config) => [config.codedWidth, config.codedHeight])).toEqual([
+      [720, 1280],
       [720, 1280],
       [1280, 720],
     ]);
+    expect(adapter.configs[1]?.description).toEqual(new Uint8Array([1, 0, 0, 0, 0, 0, 0]).buffer);
     expect(pipeline.snapshot().videoSize).toEqual({ height: 720, width: 1280 });
   });
 

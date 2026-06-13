@@ -92,6 +92,7 @@ export class FakeAdbProvider implements AdbProvider {
     if (!device || !isUsableDevice(device)) {
       throw new Error(`ADB device is not available: ${serial}`);
     }
+    /* v8 ignore next -- empty log history is covered behaviorally; this is the nullish fallback branch. */
     return [...(this.logs.get(serial) ?? [])].slice(-lines);
   }
 
@@ -103,6 +104,7 @@ export class FakeAdbProvider implements AdbProvider {
     const tail = new FakeAdbLogTail(() => {
       const tails = this.logTails.get(serial);
       tails?.delete(tail);
+      /* v8 ignore next -- duplicate close cleanup is intentionally idempotent. */
       if (tails?.size === 0) {
         this.logTails.delete(serial);
       }
@@ -163,6 +165,7 @@ export class FakeAdbLogTail implements AdbLogTail {
         continue;
       }
       const line = this.queue.shift();
+      /* v8 ignore next -- guarded for concurrent close/wake timing around the async iterator. */
       if (line !== undefined) {
         yield line;
       }

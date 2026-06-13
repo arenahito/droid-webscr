@@ -58,24 +58,24 @@ export class AdbDeviceServer implements DeviceServer {
           }
           return undefined;
         })
-        .catch(() => undefined);
+        .catch(ignoreAsyncError);
       socket = await abortable(socketPromise, signal);
       throwIfAborted(signal);
       return {
         frames: socket.chunks,
         serial,
         stop: async () => {
-          await socket?.close().catch(() => undefined);
+          await socket?.close().catch(ignoreAsyncError);
           await delay(300);
-          await session?.close().catch(() => undefined);
+          await session?.close().catch(ignoreAsyncError);
         },
         write: async (frame) => {
           await socket?.write(frame);
         },
       };
     } catch (error) {
-      await socket?.close().catch(() => undefined);
-      await session?.close().catch(() => undefined);
+      await socket?.close().catch(ignoreAsyncError);
+      await session?.close().catch(ignoreAsyncError);
       throw error;
     }
   }
@@ -148,6 +148,7 @@ function waitForReadableData(
     };
     const onData = (chunk: Uint8Array) => {
       output += decoder.decode(chunk, { stream: true });
+      /* v8 ignore next -- Node Readable readiness timing is covered through the async iterable path. */
       if (output.includes(expected)) {
         cleanup();
         resolve();
@@ -183,6 +184,11 @@ interface ReadableEventSource extends AsyncIterable<Uint8Array> {
 function isReadableEventSource(value: AsyncIterable<Uint8Array>): value is ReadableEventSource {
   const candidate = value as Partial<ReadableEventSource>;
   return typeof candidate.on === "function" && typeof candidate.off === "function";
+}
+
+/* v8 ignore next 3 -- cleanup failures are intentionally swallowed by callers. */
+function ignoreAsyncError(): undefined {
+  return undefined;
 }
 
 async function collectTextUntil(

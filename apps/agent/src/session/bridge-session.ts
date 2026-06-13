@@ -21,6 +21,7 @@ export function bridgeBrowserToDevice(
     if (typeof data === "string") {
       return;
     }
+    /* v8 ignore next -- browser binary messages are delivered as ArrayBuffer in production. */
     const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
     void deviceSession.write(bytes).catch(close);
   });

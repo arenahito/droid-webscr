@@ -101,10 +101,113 @@ describe("ADB device server boundary", () => {
     ).rejects.toThrow("Device session startup aborted.");
   });
 
+  it("closes a forwarded socket that resolves after startup is aborted", async () => {
+    let resolveSocket:
+      | ((socket: {
+          close(): Promise<void>;
+          chunks: AsyncIterable<Uint8Array>;
+          write(): Promise<void>;
+        }) => void)
+      | undefined;
+    let socketClosed = false;
+    let sessionClosed = false;
+    const abort = new AbortController();
+    const server = new AdbDeviceServer({
+      connect: async (serial) => ({
+        close: async () => {
+          sessionClosed = true;
+        },
+        openSocket: async () =>
+          await new Promise((resolve) => {
+            resolveSocket = resolve;
+          }),
+        push: async () => {},
+        serial,
+        shell: async (command) => ({
+          command,
+          exit: Promise.resolve(0),
+          stderr: emptyByteStream(),
+          stdout: singleChunkStream("droid-webscr:ready:droid-webscr\n"),
+        }),
+      }),
+      listDevices: async () => [],
+      readDeviceLogs: async () => [],
+      tailDeviceLogs: async () => {
+        throw new Error("unused");
+      },
+    });
+
+    const started = server.start("emulator-5554", { bitrateMbps: 4, fps: 30 }, abort.signal);
+    await waitForCondition(() => resolveSocket !== undefined);
+    abort.abort();
+    await expect(started).rejects.toThrow("Device session startup aborted.");
+    resolveSocket?.({
+      chunks: emptyByteStream(),
+      close: async () => {
+        socketClosed = true;
+      },
+      write: async () => {},
+    });
+    await waitForCondition(() => socketClosed);
+
+    expect(sessionClosed).toBe(true);
+  });
+
+  it("ignores a forwarded socket failure that arrives after startup is aborted", async () => {
+    let rejectSocket: ((error: Error) => void) | undefined;
+    let sessionClosed = false;
+    const abort = new AbortController();
+    const server = new AdbDeviceServer({
+      connect: async (serial) => ({
+        close: async () => {
+          sessionClosed = true;
+        },
+        openSocket: async () =>
+          await new Promise<{
+            close(): Promise<void>;
+            chunks: AsyncIterable<Uint8Array>;
+            write(): Promise<void>;
+          }>((_resolve, reject) => {
+            rejectSocket = reject;
+          }),
+        push: async () => {},
+        serial,
+        shell: async (command) => ({
+          command,
+          exit: Promise.resolve(0),
+          stderr: emptyByteStream(),
+          stdout: singleChunkStream("droid-webscr:ready:droid-webscr\n"),
+        }),
+      }),
+      listDevices: async () => [],
+      readDeviceLogs: async () => [],
+      tailDeviceLogs: async () => {
+        throw new Error("unused");
+      },
+    });
+
+    const started = server.start("emulator-5554", { bitrateMbps: 4, fps: 30 }, abort.signal);
+    await waitForCondition(() => rejectSocket !== undefined);
+    abort.abort();
+    await expect(started).rejects.toThrow("Device session startup aborted.");
+    rejectSocket?.(new Error("socket listener disappeared"));
+
+    expect(sessionClosed).toBe(true);
+  });
+
   it("waits for the Android server readiness signal before opening the socket", async () => {
     await expect(
       waitForDeviceServerReady(
         Readable.from([new TextEncoder().encode("noise\ndroid-webscr:ready:droid-webscr\n")]),
+        "droid-webscr",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("waits for readiness from plain async iterables", async () => {
+    await expect(
+      waitForDeviceServerReady(
+        singleChunkStream("noise\ndroid-webscr:ready:droid-webscr\n"),
         "droid-webscr",
       ),
     ).resolves.toBeUndefined();
@@ -115,4 +218,71 @@ describe("ADB device server boundary", () => {
       "Android device server exited before reporting ready.",
     );
   });
+
+  it("fails when a plain startup stream ends before readiness", async () => {
+    await expect(
+      waitForDeviceServerReady(
+        singleChunkStream("booting without readiness\n"),
+        "droid-webscr",
+        10,
+      ),
+    ).rejects.toThrow("Android device server exited before reporting ready.");
+  });
+
+  it("propagates readable stream errors while waiting for readiness", async () => {
+    const source = new Readable({
+      read() {
+        this.destroy(new Error("adb shell stream failed"));
+      },
+    });
+
+    await expect(waitForDeviceServerReady(source, "droid-webscr", 10)).rejects.toThrow(
+      "adb shell stream failed",
+    );
+  });
+
+  it("times out while waiting for readiness from a still-open readable stream", async () => {
+    const source = new Readable({
+      read() {
+        return;
+      },
+    });
+
+    await expect(waitForDeviceServerReady(source, "droid-webscr", 1)).rejects.toThrow(
+      "Timed out waiting for Android device server readiness.",
+    );
+    source.destroy();
+  });
+
+  it("times out while waiting for readiness from a still-open plain async iterable", async () => {
+    const source: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return { done: true, value: undefined };
+        },
+      }),
+    };
+
+    await expect(waitForDeviceServerReady(source, "droid-webscr", 1)).rejects.toThrow(
+      "Timed out waiting for Android device server readiness.",
+    );
+  });
 });
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    // oxlint-disable-next-line no-await-in-loop -- polling waits for async startup steps.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
+async function* emptyByteStream(): AsyncIterable<Uint8Array> {}
+
+async function* singleChunkStream(value: string): AsyncIterable<Uint8Array> {
+  yield new TextEncoder().encode(value);
+}

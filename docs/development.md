@@ -12,9 +12,12 @@ Run these commands before committing any implementation task:
 6. `pnpm build`
 7. `pnpm android:check`
 8. `pnpm android:build`
-9. `pnpm android:emulator:verify`
 
-All commands must complete without warnings. `pnpm android:emulator:verify` requires an online Android emulator; USB or network devices do not satisfy the emulator-backed acceptance check.
+All commands must complete without warnings.
+
+## Emulator Acceptance Check
+
+Run `pnpm android:emulator:verify` when an online Android emulator is available and Android-facing behavior needs product-level acceptance coverage. This check is not a required pre-commit gate because it depends on external emulator state. USB or network devices do not satisfy the emulator-backed acceptance check.
 
 ## Local Startup
 

@@ -32,6 +32,8 @@ describe("bridge session", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(written).toHaveLength(1);
     expect(socket.sent.map((item) => [...item])).toEqual([[7, 8]]);
+    socket.emit("close");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     socket.emit("error", new Error("boom"));
     await bridge.close();
     await bridge.close();

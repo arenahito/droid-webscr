@@ -14,10 +14,12 @@ describe("agent security helpers", () => {
   it("handles invalid origins and host policy branches", () => {
     expect(isAllowedOrigin(undefined, localConfig)).toBe(true);
     expect(isAllowedOrigin("not a url", localConfig)).toBe(false);
+    expect(isAllowedOrigin("https://localhost:7391", localConfig)).toBe(false);
     expect(isAllowedOrigin("http://localhost:7391", localConfig)).toBe(true);
     expect(isAllowedHost(undefined, localConfig)).toBe(false);
     expect(isAllowedHost("", localConfig)).toBe(false);
     expect(isAllowedHost("localhost:7391", localConfig)).toBe(true);
+    expect(isAllowedHost("::1", localConfig)).toBe(true);
     expect(isAllowedHost("evil.example", localConfig)).toBe(false);
     expect(
       isAllowedHost("0.0.0.0:7391", {

@@ -87,3 +87,9 @@ test("web dev server keeps the agent CORS development origin stable", async () =
   const config = await text("apps/web/vite.config.ts");
   assert.match(config, /strictPort:\s*true/);
 });
+
+test("coverage excludes generated build artifacts", async () => {
+  const config = await text("vitest.workspace.ts");
+  assert.match(config, /coverage:\s*{/);
+  assert.match(config, /exclude:\s*\[[^\]]*"[*][*]\/dist\/[*][*]"/s);
+});

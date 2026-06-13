@@ -29,4 +29,10 @@ describe("log drawer state", () => {
     expect(nextLogs[0]).toBe("line 1");
     expect(nextLogs.at(-1)).toBe("line 5000");
   });
+
+  it("keeps the same log list when appending no entries", () => {
+    const logs = ["line 1"];
+
+    expect(appendLogs(logs, [])).toBe(logs);
+  });
 });

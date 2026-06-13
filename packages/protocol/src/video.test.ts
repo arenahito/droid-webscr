@@ -42,11 +42,27 @@ describe("video protocol payload helpers", () => {
     const frame = parseDecoded(
       createVideoReconfigureFrame({ bitrateMbps: 12, fps: 60, sequence: 7n }),
     );
+    const unsequencedFrame = parseDecoded(createVideoReconfigureFrame({ bitrateMbps: 4, fps: 30 }));
 
     expect(frame.header.type).toBe(MessageType.VideoReconfigure);
     expect(frame.header.streamId).toBe(StreamId.Video);
     expect(frame.header.sequence).toBe(7n);
     expect(parseVideoReconfigureFrame(frame)).toEqual({ bitrateMbps: 12, fps: 60 });
+    expect(unsequencedFrame.header.sequence).toBe(0n);
+    expect(parseVideoReconfigureFrame(unsequencedFrame)).toEqual({ bitrateMbps: 4, fps: 30 });
+  });
+
+  it("rejects malformed video reconfigure payloads", () => {
+    expect(() =>
+      parseVideoReconfigureFrame({
+        header: createFrameHeader({
+          payloadLength: 4,
+          streamId: StreamId.Video,
+          type: MessageType.VideoReconfigure,
+        }),
+        payload: new Uint8Array(4),
+      }),
+    ).toThrow("VIDEO_RECONFIGURE payload must be 8 bytes");
   });
 
   it("parses video frame timestamp and keyframe flag", () => {

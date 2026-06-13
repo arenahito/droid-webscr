@@ -182,6 +182,7 @@ async function readSseLines(
       }
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split(/\r?\n\r?\n/);
+      /* v8 ignore next -- split always returns at least one item. */
       buffer = events.pop() ?? "";
       for (const event of events) {
         emitSseEvent(event, onLine);

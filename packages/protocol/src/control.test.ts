@@ -87,4 +87,44 @@ describe("control protocol payload helpers", () => {
     expect(system.ok && system.value.header.timestampUs).toBe(9n);
     expect(system.ok && system.value.payload[0]).toBe(0);
   });
+
+  it("encodes the remaining pointer and system action variants", () => {
+    const move = decodeFrame(
+      createPointerControlFrame({
+        action: "move",
+        buttons: 0,
+        pointerId: 1,
+        pressure: -1,
+        x: 1,
+        y: 2,
+      }),
+    );
+    const up = decodeFrame(
+      createPointerControlFrame({
+        action: "up",
+        buttons: 0,
+        pointerId: 1,
+        pressure: 1,
+        x: 1,
+        y: 2,
+      }),
+    );
+    const keyDown = decodeFrame(
+      createKeyControlFrame({
+        action: "down",
+        keyCode: 66,
+        metaState: 0,
+        repeat: 0,
+      }),
+    );
+    const volumeDown = decodeFrame(createSystemControlFrame("volume-down"));
+    const keyboard = decodeFrame(createSystemControlFrame("keyboard"));
+
+    expect(move.ok && move.value.payload[0]).toBe(1);
+    expect(move.ok && move.value.payload[12]).toBe(0);
+    expect(up.ok && up.value.payload[0]).toBe(2);
+    expect(keyDown.ok && keyDown.value.payload[0]).toBe(0);
+    expect(volumeDown.ok && volumeDown.value.payload[0]).toBe(4);
+    expect(keyboard.ok && keyboard.value.payload[0]).toBe(6);
+  });
 });

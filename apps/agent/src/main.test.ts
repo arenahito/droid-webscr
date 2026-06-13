@@ -29,6 +29,7 @@ describe("startAgent", () => {
         clipboard: { enabled: false },
         port,
       },
+      deviceServerArtifact: testDeviceServerArtifact,
     });
 
     const rebind = await fetch(`http://127.0.0.1:${port}/api/config/bind`, {
@@ -76,6 +77,7 @@ describe("startAgent", () => {
         clipboard: { enabled: false },
         port: firstPort,
       },
+      deviceServerArtifact: testDeviceServerArtifact,
     });
 
     const firstRebind = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
@@ -114,6 +116,7 @@ describe("startAgent", () => {
         clipboard: { enabled: false },
         port: firstPort,
       },
+      deviceServerArtifact: testDeviceServerArtifact,
     });
 
     const failed = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
@@ -130,6 +133,11 @@ describe("startAgent", () => {
     await closeServer(blocker);
   });
 });
+
+const testDeviceServerArtifact = {
+  localPath: "test-droid-webscr-server.jar",
+  remotePath: "/data/local/tmp/test-droid-webscr-server.jar",
+};
 
 async function getOpenPort(): Promise<number> {
   return await new Promise((resolve, reject) => {

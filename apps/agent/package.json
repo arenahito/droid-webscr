@@ -40,6 +40,10 @@
     "pino": "10.3.1"
   },
   "devDependencies": {
+    "@droid-webscr/adb": "workspace:*",
+    "@droid-webscr/config": "workspace:*",
+    "@droid-webscr/protocol": "workspace:*",
+    "@droid-webscr/transport": "workspace:*",
     "@types/ws": "8.18.1"
   }
 }

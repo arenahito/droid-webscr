@@ -4,6 +4,7 @@
     "apps/agent": {
       "component": "droid-webscr",
       "include-component-in-tag": false,
+      "initial-version": "0.1.0",
       "package-name": "@arenahito/droid-webscr",
       "release-type": "node"
     }

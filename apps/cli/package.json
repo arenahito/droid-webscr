@@ -30,7 +30,6 @@
     "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@droid-webscr/agent": "workspace:*",
     "@fastify/middie": "9.3.2",
     "@fastify/websocket": "11.2.0",
     "fastify": "5.8.5",

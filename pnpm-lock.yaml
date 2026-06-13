@@ -69,9 +69,6 @@ importers:
 
   apps/cli:
     dependencies:
-      '@droid-webscr/agent':
-        specifier: workspace:*
-        version: link:../agent
       '@fastify/middie':
         specifier: 9.3.2
         version: 9.3.2

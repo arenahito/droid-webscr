@@ -16,7 +16,7 @@
     "typecheck": "pnpm type-check",
     "test": "vitest run --config vitest.workspace.ts && node --test tools/android-emulator-verify.test.mjs",
     "test:coverage": "vitest run --coverage --config vitest.workspace.ts",
-    "package:build": "pnpm android:build && pnpm --filter @droid-webscr/web build && pnpm --filter @arenahito/droid-webscr build",
+    "package:build": "pnpm android:build && pnpm --filter @droid-webscr/web... build && pnpm --filter @arenahito/droid-webscr build",
     "package:dry-run": "pnpm package:build && pnpm --dir apps/cli pack --dry-run",
     "android:build": "node tools/android-gradle.mjs build",
     "android:check": "node tools/android-gradle.mjs check",

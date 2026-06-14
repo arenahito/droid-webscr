@@ -169,8 +169,48 @@ describe("DroidWebscrApp", () => {
         headers: {},
       }),
     );
-    expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
+  });
+
+  it("uses injected agent endpoint and auth token before persisted storage", async () => {
+    const storage = createMemoryStorage({
+      "droid-webscr.agentEndpoint": "http://127.0.0.1:7391",
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "http://127.0.0.1:7400/api/devices") {
+        return jsonResponse({ devices: [] });
+      }
+      if (url === "http://127.0.0.1:7400/api/config") {
+        return jsonResponse({
+          bindHost: "127.0.0.1",
+          clipboardEnabled: true,
+          port: 7400,
+        });
+      }
+      if (url === "http://127.0.0.1:7400/api/share-url") {
+        return jsonResponse({ url: "http://127.0.0.1:7400" });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DroidWebscrApp
+        initialAgentConfig={{
+          agentUrl: "http://127.0.0.1:7400",
+          authToken: "injected-token",
+        }}
+        storage={storage}
+      />,
+    );
+
+    expect(await screen.findByText("No Android devices detected")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:7400/api/config", {
+        headers: { authorization: "Bearer injected-token" },
+      }),
+    );
   });
 
   it("uses design fallback devices only for file-based design previews", async () => {
@@ -241,7 +281,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Task list" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
-    expect(screen.getByText("Bind 127.0.0.1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Disconnected Android screen" })).toBeInTheDocument();
     expect(screen.queryByText("Wi-Fi 100%")).not.toBeInTheDocument();
     expect(screen.queryByText("Play Store")).not.toBeInTheDocument();
@@ -447,7 +487,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Open Pixel 6 menu" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Refresh devices" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Bind" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Refresh devices" }));
     expect(scanCalls).toBe(0);
@@ -465,7 +505,7 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Open Pixel 6 menu" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Refresh devices" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Bind" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
   });
 
   it("opens the binary session socket and sends video and system control frames", async () => {
@@ -2566,23 +2606,10 @@ describe("DroidWebscrApp", () => {
     expect(within(logDrawer).getByText(/Tail line 2/)).toBeInTheDocument();
   });
 
-  it("matches the design interaction contract for chrome, access, and guarded actions", async () => {
+  it("matches the design interaction contract for chrome and guarded actions", async () => {
     const user = userEvent.setup();
     const storage = createMemoryStorage();
     const socket = new FakeBinaryWebSocket();
-    const writeText = vi.fn();
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    const saveRuntimeBind = vi.fn(async (bindHost: string, port: number) => ({
-      bindHost,
-      clipboardEnabled: false,
-      message: `Agent is now listening on ${bindHost}:${port}.`,
-      ok: true,
-      port,
-      shareUrl: `http://${bindHost}:${port}`,
-    }));
     const saveRuntimeClipboard = vi.fn();
     render(
       <DroidWebscrApp
@@ -2605,7 +2632,6 @@ describe("DroidWebscrApp", () => {
               transportKind: "emulator",
             },
           ],
-          saveRuntimeBind,
           saveRuntimeClipboard,
           shareUrl: async () => ({ url: "http://127.0.0.1:7391" }),
         }}
@@ -2628,34 +2654,15 @@ describe("DroidWebscrApp", () => {
     expect(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
-    expect(screen.queryByRole("complementary", { name: "Device and access controls" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Device controls" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
-    expect(screen.getByRole("complementary", { name: "Device and access controls" })).toBeVisible();
+    expect(screen.getByRole("complementary", { name: "Device controls" })).toBeVisible();
 
     expect(screen.queryByRole("button", { name: "Capture" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Bind" }));
-    expect(screen.getByRole("dialog", { name: "Bind access" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Bind address" })).toHaveValue("127.0.0.1");
-    expect(screen.getByLabelText("Port")).toHaveValue(7391);
-    expect(screen.getByLabelText("Share URL")).toHaveValue("http://127.0.0.1:7391");
-    expect(screen.getByText(/Non-local bind addresses allow/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy share URL" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Apply bind" })).toBeEnabled();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Bind address" }), "0.0.0.0");
-    await user.clear(screen.getByLabelText("Port"));
-    await user.type(screen.getByLabelText("Port"), "7401");
-    expect(screen.getByLabelText("Share URL")).toHaveValue("http://127.0.0.1:7401");
-    await user.click(screen.getByRole("button", { name: "Copy share URL" }));
-    expect(writeText).toHaveBeenCalledWith("http://127.0.0.1:7401");
-    expect(await screen.findByText("Share URL copied")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Apply bind" }));
-    expect(saveRuntimeBind).toHaveBeenCalledWith("0.0.0.0", 7401);
-    expect(await screen.findByText("Agent is now listening on 0.0.0.0:7401.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Bind" }));
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Bind access" })).not.toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: "Toggle clipboard sync" })).not.toBeInTheDocument();
     expect(screen.queryByText("Clipboard")).not.toBeInTheDocument();

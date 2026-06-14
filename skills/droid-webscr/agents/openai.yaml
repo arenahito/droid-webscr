@@ -1,0 +1,4 @@
+interface:
+  display_name: "droid-webscr"
+  short_description: "Test npm droid-webscr through a browser"
+  default_prompt: "Use $droid-webscr to verify an Android workflow through an npm-installed droid-webscr browser UI."

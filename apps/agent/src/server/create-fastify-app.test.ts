@@ -4,12 +4,51 @@ import { AdbAuthorizationState, AdbTransportKind } from "@droid-webscr/adb";
 import { AgentConfig } from "@droid-webscr/config";
 import { createFrameHeader, encodeFrame, MessageType, StreamId } from "@droid-webscr/protocol";
 import {
-  createFastifyApp,
+  createFastifyApp as createBaseFastifyApp,
   createLoggerOptions,
   hasBinaryWebSocketProtocol,
   selectBinaryWebSocketProtocol,
 } from "./create-fastify-app.js";
 import { binaryWebSocketProtocol } from "./websocket.js";
+
+const agentAuthHeader = { authorization: "Bearer secret" };
+
+async function createFastifyApp(...args: Parameters<typeof createBaseFastifyApp>) {
+  const app = await createBaseFastifyApp(...args);
+  const inject = app.inject.bind(app);
+  app.inject = ((options, callback) => {
+    if (typeof options === "string") {
+      return inject(options, callback);
+    }
+    const headers = options.headers ?? {};
+    const hasAuthorization = Object.keys(headers).some(
+      (name) => name.toLowerCase() === "authorization",
+    );
+    const shouldAuthorize =
+      typeof options.url === "string" &&
+      options.url.startsWith("/api/") &&
+      options.url !== "/api/health";
+    const nextOptions =
+      shouldAuthorize && !hasAuthorization
+        ? { ...options, headers: { ...headers, ...agentAuthHeader } }
+        : options;
+    return inject(nextOptions, callback);
+  }) as typeof app.inject;
+
+  const injectWS = app.injectWS.bind(app);
+  app.injectWS = ((url, options) => {
+    const headers = options?.headers ?? {};
+    const hasAuthorization = Object.keys(headers).some(
+      (name) => name.toLowerCase() === "authorization",
+    );
+    return injectWS(url, {
+      ...options,
+      headers: hasAuthorization ? headers : { ...headers, ...agentAuthHeader },
+    });
+  }) as typeof app.injectWS;
+
+  return app;
+}
 
 describe("agent server", () => {
   it("configures structured logging with token redaction", () => {
@@ -68,6 +107,44 @@ describe("agent server", () => {
     expect(fallback.body).toContain('<div id="root"></div>');
     expect(api.statusCode).toBe(200);
     expect(missingApi.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("keeps packaged web UI local even when the agent API is bound publicly", async () => {
+    const app = await createFastifyApp({
+      ...testContext({
+        authToken: "secret",
+        bindHost: "0.0.0.0",
+        clipboard: { enabled: false },
+        port: 7391,
+      }),
+      webUi: {
+        staticFiles: {
+          "/": { content: "<!doctype html><main>local ui</main>", contentType: "text/html" },
+        },
+      },
+    });
+
+    const localUi = await app.inject({
+      method: "GET",
+      remoteAddress: "127.0.0.1",
+      url: "/",
+    });
+    const remoteUi = await app.inject({
+      method: "GET",
+      remoteAddress: "192.168.1.44",
+      url: "/",
+    });
+    const remoteApi = await app.inject({
+      headers: { authorization: "Bearer secret" },
+      method: "GET",
+      remoteAddress: "192.168.1.44",
+      url: "/api/devices",
+    });
+
+    expect(localUi.statusCode).toBe(200);
+    expect(remoteUi.statusCode).toBe(404);
+    expect(remoteApi.statusCode).toBe(200);
     await app.close();
   });
 
@@ -133,8 +210,13 @@ describe("agent server", () => {
       }),
     );
     const response = await app.inject({ method: "GET", url: "/api/health" });
-    const devicesWithoutAuth = await app.inject({ method: "GET", url: "/api/devices" });
+    const devicesWithoutAuth = await app.inject({
+      headers: { authorization: "" },
+      method: "GET",
+      url: "/api/devices",
+    });
     const createWithoutAuth = await app.inject({
+      headers: { authorization: "" },
       method: "POST",
       payload: { serial: "emulator-5554" },
       url: "/api/sessions",
@@ -279,7 +361,7 @@ describe("agent server", () => {
     await app.close();
   });
 
-  it("does not reflect arbitrary loopback origins in CORS", async () => {
+  it("allows token-protected local web UI origins on alternate loopback ports", async () => {
     const app = await createFastifyApp(testContext());
 
     const preflight = await app.inject({
@@ -301,8 +383,8 @@ describe("agent server", () => {
 
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers["access-control-allow-methods"]).toBe("GET, POST, PATCH, OPTIONS");
-    expect(response.statusCode).toBe(403);
-    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5174");
     const sameHostDifferentPort = await app.inject({
       headers: {
         host: "127.0.0.1:7391",
@@ -311,8 +393,10 @@ describe("agent server", () => {
       method: "GET",
       url: "/api/devices",
     });
-    expect(sameHostDifferentPort.statusCode).toBe(403);
-    expect(sameHostDifferentPort.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(sameHostDifferentPort.statusCode).toBe(200);
+    expect(sameHostDifferentPort.headers["access-control-allow-origin"]).toBe(
+      "http://127.0.0.1:5174",
+    );
     await app.close();
   });
 
@@ -524,7 +608,7 @@ describe("agent server", () => {
     );
     const ipv6 = await createFastifyApp(
       testContext({
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "::1",
         clipboard: { enabled: false },
         port: 7391,
@@ -540,24 +624,31 @@ describe("agent server", () => {
         })
       ).json(),
     ).toEqual({ url: "http://127.0.0.1:7391" });
-    expect((await ipv6.inject({ method: "GET", url: "/api/share-url" })).json()).toEqual({
-      url: "http://[::1]:7391",
-    });
+    expect(
+      (
+        await ipv6.inject({
+          headers: { authorization: "Bearer secret" },
+          method: "GET",
+          url: "/api/share-url",
+        })
+      ).json(),
+    ).toEqual({ url: "http://[::1]:7391" });
     await wildcard.close();
     await ipv6.close();
   });
 
-  it("rejects unsafe runtime bind updates without auth", async () => {
+  it("rejects runtime bind updates without bearer auth", async () => {
     const app = await createFastifyApp(testContext());
 
     const response = await app.inject({
+      headers: { authorization: "" },
       method: "PATCH",
       payload: { bindHost: "0.0.0.0", port: 7391 },
       url: "/api/config/bind",
     });
 
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toEqual({ error: "Non-local bind addresses require authToken." });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toEqual({ error: "Invalid agent auth token" });
     await app.close();
   });
 
@@ -603,7 +694,7 @@ describe("agent server", () => {
   it("accepts IPv6 loopback hosts in runtime origin checks", async () => {
     const app = await createFastifyApp(
       testContext({
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "::1",
         clipboard: { enabled: false },
         port: 7391,
@@ -651,7 +742,7 @@ describe("agent server", () => {
   it("accepts loopback host aliases when bound to localhost", async () => {
     const app = await createFastifyApp(
       testContext({
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "localhost",
         clipboard: { enabled: false },
         port: 7391,
@@ -688,7 +779,7 @@ describe("agent server", () => {
   it("accepts default-port same-origin hosts without explicit ports", async () => {
     const app = await createFastifyApp(
       testContext({
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "localhost",
         clipboard: { enabled: false },
         port: 80,
@@ -757,8 +848,13 @@ describe("agent server", () => {
     for (const item of cases) {
       const options =
         item.payload === undefined
-          ? { method: item.method, url: item.url }
-          : { method: item.method, payload: item.payload, url: item.url };
+          ? { headers: { authorization: "" }, method: item.method, url: item.url }
+          : {
+              headers: { authorization: "" },
+              method: item.method,
+              payload: item.payload,
+              url: item.url,
+            };
       // oxlint-disable-next-line no-await-in-loop -- each protected route is checked independently.
       const response = await app.inject(options);
       expect(response.statusCode, item.url).toBe(401);
@@ -803,7 +899,7 @@ describe("agent server", () => {
       (
         await app.inject({
           method: "PATCH",
-          payload: { bindHost: "127.0.0.1", port: 0 },
+          payload: { bindHost: "127.0.0.1", port: -1 },
           url: "/api/config/bind",
         })
       ).statusCode,
@@ -1524,7 +1620,7 @@ async function* singleChunkStream(value: string): AsyncIterable<Uint8Array> {
 
 function testContext(
   config: AgentConfig = {
-    authToken: undefined,
+    authToken: "secret",
     bindHost: "127.0.0.1",
     clipboard: { enabled: false },
     port: 7391,

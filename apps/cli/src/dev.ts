@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { isDirectRun, startAgent, type WebUiProvider } from "@droid-webscr/agent";
 import { createServer as createViteServer } from "vite";
 import packageJson from "../package.json" with { type: "json" };
-import { runCli } from "./cli.js";
+import { runCli, type RuntimeStartOptions } from "./cli.js";
+import { injectInitialConfig } from "./web-ui-runtime.js";
 
 interface DevelopmentViteServer {
   readonly close: () => Promise<void>;
@@ -24,6 +25,7 @@ const webRoot = join(workspaceRoot, "apps", "web");
 
 export async function createDevelopmentWebUi(
   options: DevelopmentWebUiOptions,
+  initialConfig: { readonly authToken: string },
 ): Promise<WebUiProvider> {
   const createServer =
     options.createViteServer ??
@@ -43,14 +45,21 @@ export async function createDevelopmentWebUi(
     devMiddleware: vite.middlewares,
     renderIndex: async (url: string) => {
       const html = await readFile(indexHtmlPath, "utf8");
-      return vite.transformIndexHtml(url, html);
+      const transformed = await vite.transformIndexHtml(url, html);
+      return injectInitialConfig(transformed, initialConfig);
     },
   };
 }
 
-export async function startDevelopmentRuntime() {
+export async function startDevelopmentRuntime(options: RuntimeStartOptions) {
   return startAgent({
-    webUi: await createDevelopmentWebUi({ webRoot }),
+    config: {
+      authToken: options.authToken,
+      bindHost: options.host,
+      clipboard: { enabled: false },
+      port: options.port,
+    },
+    webUi: await createDevelopmentWebUi({ webRoot }, { authToken: options.authToken }),
   });
 }
 

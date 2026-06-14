@@ -70,8 +70,8 @@ describe("agent security helpers", () => {
     expect(validateSessionToken(record, record.token, 110)).toBe(false);
   });
 
-  it("requires configured agent bearer auth without weakening local defaults", () => {
-    expect(validateAgentAuthHeader(undefined, localConfig)).toBe(true);
+  it("requires agent bearer auth even when local defaults do not configure a token", () => {
+    expect(validateAgentAuthHeader(undefined, localConfig)).toBe(false);
     expect(validateAgentAuthHeader("Bearer secret", { ...localConfig, authToken: "secret" })).toBe(
       true,
     );
@@ -83,6 +83,27 @@ describe("agent security helpers", () => {
         ...localConfig,
         authToken: "secret",
       }),
+    ).toBe(true);
+  });
+
+  it("allows token-protected agents to accept local web UI origins on other ports", () => {
+    expect(
+      isAllowedOrigin(
+        "http://127.0.0.1:7401",
+        { ...localConfig, authToken: "secret" },
+        "127.0.0.1:7400",
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedOrigin(
+        "http://127.0.0.1:7401",
+        {
+          ...localConfig,
+          authToken: "secret",
+          bindHost: "0.0.0.0",
+        },
+        "192.168.1.20:7400",
+      ),
     ).toBe(true);
   });
 });

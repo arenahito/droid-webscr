@@ -14,14 +14,17 @@ describe("development web UI provider", () => {
     );
     const middleware = vi.fn();
 
-    const provider = await createDevelopmentWebUi({
-      createViteServer: async () => ({
-        close,
-        middlewares: middleware,
-        transformIndexHtml,
-      }),
-      webRoot,
-    });
+    const provider = await createDevelopmentWebUi(
+      {
+        createViteServer: async () => ({
+          close,
+          middlewares: middleware,
+          transformIndexHtml,
+        }),
+        webRoot,
+      },
+      { authToken: "secret" },
+    );
     const renderIndex = provider.renderIndex;
     if (!renderIndex) {
       throw new Error("Expected development provider to render index HTML.");
@@ -30,6 +33,7 @@ describe("development web UI provider", () => {
 
     expect(provider.devMiddleware).toBe(middleware);
     expect(html).toContain("/@vite/client");
+    expect(html).toContain('"authToken":"secret"');
     await provider.close?.();
     expect(close).toHaveBeenCalledOnce();
   });

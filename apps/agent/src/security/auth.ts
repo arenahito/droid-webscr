@@ -13,9 +13,6 @@ export function validateAgentAuthHeader(
   authorization: string | string[] | undefined,
   config: AgentConfig,
 ): boolean {
-  if (!config.authToken) {
-    return true;
-  }
   const values = Array.isArray(authorization) ? authorization : [authorization];
   return values.some((value) => value === `Bearer ${config.authToken}`);
 }

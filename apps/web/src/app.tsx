@@ -14,7 +14,6 @@ import {
   RefreshCw,
   RotateCcw,
   RotateCw,
-  Settings2,
   Smartphone,
   Square,
   Sun,
@@ -41,11 +40,7 @@ import {
   VideoPipelineSnapshot,
 } from "./decoder/video-pipeline.js";
 import { DeviceDescriptor } from "./features/devices/device-types.js";
-import {
-  AgentClient,
-  createHttpAgentClient,
-  RuntimeConfig,
-} from "./features/session/agent-client.js";
+import { AgentClient, createHttpAgentClient } from "./features/session/agent-client.js";
 import { appendLogs } from "./features/session/log-drawer-state.js";
 import {
   reduceSessionState,
@@ -69,6 +64,7 @@ const deviceLogFlushIntervalMs = 500;
 
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
+  readonly initialAgentConfig?: InitialAgentConfig | undefined;
   readonly initialLogs?: readonly string[] | undefined;
   readonly sessionSocketFactory?: ((session: SessionRecord) => SessionSocket) | undefined;
   readonly videoPipelineFactory?:
@@ -77,10 +73,15 @@ export interface DroidWebscrAppProps {
   readonly storage?: StorageLike | undefined;
 }
 
+export interface InitialAgentConfig {
+  readonly agentUrl?: string | undefined;
+  readonly authToken?: string | undefined;
+}
+
 type NormalizedLogLevel = "debug" | "error" | "info" | "verbose" | "warn";
 type LogLevel = "all" | Exclude<NormalizedLogLevel, "verbose">;
 type DeviceLogStatus = "idle" | "connecting" | "tailing" | "error";
-type DialogKind = "endpoint" | "bind" | "power" | undefined;
+type DialogKind = "endpoint" | "power" | undefined;
 
 interface PinchGesture {
   readonly browserPointerId: number;
@@ -103,7 +104,7 @@ const defaultSessionState: SessionState = {
   session: undefined,
 };
 
-const fallbackRuntimeConfig: RuntimeConfig = {
+const fallbackRuntimeConfig = {
   bindHost: "127.0.0.1",
   clipboardEnabled: false,
   port: 7391,
@@ -127,24 +128,30 @@ const designInitialLogs: readonly string[] = [
   "10:42:14.092 INFO   session    Agent ready",
 ];
 const agentEndpointStorageKey = "droid-webscr.agentEndpoint";
+const initialAgentConfigKey = "__DROID_WEBSCR_CONFIG__";
 
 export function DroidWebscrApp({
   client,
+  initialAgentConfig = readInitialAgentConfig(),
   initialLogs = designInitialLogs,
   sessionSocketFactory,
   videoPipelineFactory = createDefaultVideoPipeline,
   storage = browserStorage(),
 }: DroidWebscrAppProps): React.ReactElement {
   const [agentBaseUrl, setAgentBaseUrl] = React.useState(
-    () => storage.getItem(agentEndpointStorageKey) ?? "",
+    () => initialAgentConfig.agentUrl ?? storage.getItem(agentEndpointStorageKey) ?? "",
   );
   const agentClient = React.useMemo(
-    () => client ?? createHttpAgentClient({ baseUrl: agentBaseUrl }),
-    [agentBaseUrl, client],
+    () =>
+      client ??
+      createHttpAgentClient({
+        authToken: initialAgentConfig.authToken,
+        baseUrl: agentBaseUrl,
+      }),
+    [agentBaseUrl, client, initialAgentConfig.authToken],
   );
   const [devices, setDevices] = React.useState<readonly DeviceDescriptor[]>([]);
   const [loadingDevices, setLoadingDevices] = React.useState(true);
-  const [runtimeConfig, setRuntimeConfig] = React.useState<RuntimeConfig>(fallbackRuntimeConfig);
   const [theme, setTheme] = React.useState<ThemePreference>(() => readTheme(storage));
   const [videoSnapshot, setVideoSnapshot] = React.useState<VideoPipelineSnapshot | undefined>();
   const [controlReady, setControlReadyState] = React.useState(false);
@@ -154,11 +161,6 @@ export function DroidWebscrApp({
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [dialog, setDialog] = React.useState<DialogKind>();
   const [dialogValue, setDialogValue] = React.useState("");
-  const [bindHostDraft, setBindHostDraft] = React.useState(fallbackRuntimeConfig.bindHost);
-  const [bindPortDraft, setBindPortDraft] = React.useState(String(fallbackRuntimeConfig.port));
-  const [shareUrl, setShareUrl] = React.useState(
-    createShareUrl(fallbackRuntimeConfig.bindHost, fallbackRuntimeConfig.port),
-  );
   const [toast, setToast] = React.useState<string | undefined>();
   const [logLevel, setLogLevel] = React.useState<LogLevel>("info");
   const [autoscroll, setAutoscroll] = React.useState(true);
@@ -310,10 +312,6 @@ export function DroidWebscrApp({
       void agentClient
         .getRuntimeConfig?.()
         .then((config) => {
-          setRuntimeConfig(config);
-          setBindHostDraft(config.bindHost);
-          setBindPortDraft(String(config.port));
-          setShareUrl(createShareUrl(config.bindHost, config.port, agentBaseUrl));
           persistAgentBaseUrl(
             createAgentEndpointUrl(config.bindHost, config.port, agentBaseUrl),
             setAgentBaseUrl,
@@ -383,13 +381,6 @@ export function DroidWebscrApp({
     notify,
     state.selectedSerial,
   ]);
-
-  const openBindDialog = React.useCallback(() => {
-    setBindHostDraft(runtimeConfig.bindHost);
-    setBindPortDraft(String(runtimeConfig.port));
-    setShareUrl(createShareUrl(runtimeConfig.bindHost, runtimeConfig.port, agentBaseUrl));
-    setDialog("bind");
-  }, [agentBaseUrl, runtimeConfig]);
 
   const finishSession = React.useCallback(
     (options: {
@@ -620,34 +611,6 @@ export function DroidWebscrApp({
         notify("Endpoint connected");
         await refreshDeviceList();
       }
-      if (dialog === "bind") {
-        const bindHost = bindHostDraft.trim();
-        const bindPort = Number(bindPortDraft);
-        /* v8 ignore next -- the dialog keeps a concrete bind host selected in supported UI flows. */
-        const host = bindHost.length > 0 ? bindHost : runtimeConfig.bindHost;
-        /* v8 ignore next -- invalid numeric input is handled by the browser input before submit. */
-        const port = Number.isFinite(bindPort) && bindPort > 0 ? bindPort : runtimeConfig.port;
-        const result = await agentClient.saveRuntimeBind?.(host, port);
-        /* v8 ignore start -- partial bind responses are defensive compatibility fallbacks. */
-        setRuntimeConfig((current) => ({
-          ...current,
-          bindHost: result?.bindHost ?? host,
-          clipboardEnabled: result?.clipboardEnabled ?? current.clipboardEnabled,
-          port: result?.port ?? port,
-        }));
-        /* v8 ignore stop */
-        const nextAgentBaseUrl = createAgentEndpointUrl(host, port, agentBaseUrl);
-        const nextShareUrl = createShareUrl(host, port, nextAgentBaseUrl);
-        setShareUrl(nextShareUrl);
-        persistAgentBaseUrl(nextAgentBaseUrl, setAgentBaseUrl, storage);
-        /* v8 ignore start -- missing bind messages are defensive compatibility fallbacks. */
-        dispatch({
-          message: result?.message ?? `INFO Agent is now listening on ${host}:${port}.`,
-          type: "log",
-        });
-        notify(result?.message ?? (result?.ok ? "Bind applied" : "Bind update queued"));
-        /* v8 ignore stop */
-      }
       if (dialog === "power") {
         sendSystemAction("power");
       }
@@ -660,19 +623,7 @@ export function DroidWebscrApp({
         type: "failed",
       });
     }
-  }, [
-    agentBaseUrl,
-    agentClient,
-    bindHostDraft,
-    bindPortDraft,
-    dialog,
-    dialogValue,
-    notify,
-    refreshDeviceList,
-    runtimeConfig,
-    sendSystemAction,
-    storage,
-  ]);
+  }, [agentClient, dialog, dialogValue, notify, refreshDeviceList, sendSystemAction]);
 
   const sendKey = React.useCallback(
     (event: React.KeyboardEvent) => {
@@ -1073,14 +1024,6 @@ export function DroidWebscrApp({
             onStartSession={(device) => void startSessionForSerial(device.serial)}
             sessionActive={Boolean(state.session) || state.phase === "starting"}
             selectedSerial={state.selectedSerial}
-            accessPanel={
-              <AccessPanel
-                disabled={Boolean(state.session) || state.phase === "starting"}
-                host={runtimeConfig.bindHost}
-                onBind={openBindDialog}
-                port={runtimeConfig.port}
-              />
-            }
           />
         )}
         <section className="viewport-grid bg-viewport" ref={viewportRef}>
@@ -1152,26 +1095,11 @@ export function DroidWebscrApp({
       {dialog ? (
         <Dialog
           kind={dialog}
-          bindHost={bindHostDraft}
-          bindPort={bindPortDraft}
           onCancel={() => {
             setDialog(undefined);
           }}
-          onCopyShareUrl={() => {
-            void navigator.clipboard?.writeText(shareUrl);
-            notify("Share URL copied");
-          }}
           onSubmit={() => void submitDialog()}
-          onBindHostChange={(value) => {
-            setBindHostDraft(value);
-            setShareUrl(createShareUrl(value, Number(bindPortDraft), agentBaseUrl));
-          }}
-          onBindPortChange={(value) => {
-            setBindPortDraft(value);
-            setShareUrl(createShareUrl(bindHostDraft, Number(value), agentBaseUrl));
-          }}
           onValueChange={setDialogValue}
-          shareUrl={shareUrl}
           value={dialogValue}
         />
       ) : null}
@@ -1285,7 +1213,6 @@ function Topbar({
 }
 
 function Sidebar({
-  accessPanel,
   devices,
   loading,
   onConnectEndpoint,
@@ -1296,7 +1223,6 @@ function Sidebar({
   sessionActive,
   selectedSerial,
 }: {
-  readonly accessPanel: React.ReactNode;
   readonly devices: readonly DeviceDescriptor[];
   readonly loading: boolean;
   readonly onConnectEndpoint: () => void;
@@ -1337,7 +1263,7 @@ function Sidebar({
   }, [openSerial]);
 
   return (
-    <aside aria-label="Device and access controls" className="sidebar">
+    <aside aria-label="Device controls" className="sidebar">
       <div className="sidebar-section">
         <div className="section-heading">
           <h2>DEVICES</h2>
@@ -1449,44 +1375,7 @@ function Sidebar({
           Connect by endpoint
         </Button>
       </div>
-      {accessPanel}
     </aside>
-  );
-}
-
-function AccessPanel({
-  disabled,
-  host,
-  onBind,
-  port,
-}: {
-  readonly disabled: boolean;
-  readonly host: string;
-  readonly onBind: () => void;
-  readonly port: number;
-}): React.ReactElement {
-  return (
-    <section className="access-panel">
-      <h2>ACCESS</h2>
-      <button
-        aria-label="Bind"
-        className="access-row access-action"
-        disabled={disabled}
-        onClick={onBind}
-        type="button"
-      >
-        <span>
-          <Settings2 aria-hidden="true" data-icon="inline-start" />
-          Bind
-        </span>
-        <strong>{host}</strong>
-        <span aria-hidden="true">&gt;</span>
-      </button>
-      <span className="compat-text">
-        Bind {host}:{port}
-      </span>
-      <span className="compat-text">Bind {host}</span>
-    </section>
   );
 }
 
@@ -2061,32 +1950,19 @@ function isLogScrolledToBottom(element: HTMLElement): boolean {
 }
 
 function Dialog({
-  bindHost,
-  bindPort,
   kind,
   onCancel,
-  onBindHostChange,
-  onBindPortChange,
-  onCopyShareUrl,
   onSubmit,
   onValueChange,
-  shareUrl,
   value,
 }: {
-  readonly bindHost: string;
-  readonly bindPort: string;
   readonly kind: Exclude<DialogKind, undefined>;
   readonly onCancel: () => void;
-  readonly onBindHostChange: (value: string) => void;
-  readonly onBindPortChange: (value: string) => void;
-  readonly onCopyShareUrl: () => void;
   readonly onSubmit: () => void;
   readonly onValueChange: (value: string) => void;
-  readonly shareUrl: string;
   readonly value: string;
 }): React.ReactElement {
-  const title =
-    kind === "endpoint" ? "Connect by endpoint" : kind === "bind" ? "Bind access" : "Power action";
+  const title = kind === "endpoint" ? "Connect by endpoint" : "Power action";
   return (
     <div
       aria-label={title}
@@ -2099,39 +1975,6 @@ function Dialog({
           <h2 id="dialog-title">{title}</h2>
         </div>
         <div className="dialog-body">
-          {kind === "bind" ? (
-            <>
-              <label className="field">
-                Bind address
-                <select
-                  aria-label="Bind address"
-                  onChange={(event) => onBindHostChange(event.target.value)}
-                  value={bindHost}
-                >
-                  <option value="127.0.0.1">127.0.0.1</option>
-                  <option value="0.0.0.0">0.0.0.0</option>
-                  <option value="192.168.1.20">192.168.1.20</option>
-                </select>
-              </label>
-              <label className="field">
-                Port
-                <input
-                  aria-label="Port"
-                  onChange={(event) => onBindPortChange(event.target.value)}
-                  type="number"
-                  value={bindPort}
-                />
-              </label>
-              <p className="status-note">
-                Non-local bind addresses allow any client that can reach this PC address to connect.
-                Authentication is required.
-              </p>
-              <label className="field">
-                Share URL
-                <input aria-label="Share URL" readOnly value={shareUrl} />
-              </label>
-            </>
-          ) : null}
           {kind === "endpoint" ? (
             <>
               <label className="field">
@@ -2164,17 +2007,6 @@ function Dialog({
               </Button>
             </>
           ) : null}
-          {kind === "bind" ? (
-            <>
-              <Button onClick={onCancel} variant="outline">
-                Cancel
-              </Button>
-              <Button onClick={onCopyShareUrl} variant="outline">
-                Copy share URL
-              </Button>
-              <Button onClick={onSubmit}>Apply bind</Button>
-            </>
-          ) : null}
           {kind === "endpoint" ? (
             <>
               <Button onClick={onCancel} variant="outline">
@@ -2195,6 +2027,21 @@ function browserStorage(): StorageLike {
     return createMemoryStorage();
   }
   return window.localStorage;
+}
+
+function readInitialAgentConfig(): InitialAgentConfig {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  const candidate = (window as unknown as Record<string, unknown>)[initialAgentConfigKey];
+  if (!candidate || typeof candidate !== "object") {
+    return {};
+  }
+  const config = candidate as { readonly agentUrl?: unknown; readonly authToken?: unknown };
+  return {
+    agentUrl: typeof config.agentUrl === "string" ? config.agentUrl : undefined,
+    authToken: typeof config.authToken === "string" ? config.authToken : undefined,
+  };
 }
 
 function shouldUseDesignApiFallback(client: AgentClient | undefined): boolean {
@@ -2226,15 +2073,6 @@ function designFallbackDevices(): readonly DeviceDescriptor[] {
       transportKind: "network",
     },
   ];
-}
-
-function createShareUrl(bindHost: string, port: number, agentBaseUrl = ""): string {
-  const nextPort = Number.isFinite(port) && port > 0 ? port : fallbackRuntimeConfig.port;
-  const endpointHost = parseUrlHost(agentBaseUrl) ?? currentBrowserHost();
-  if (bindHost === "0.0.0.0" || bindHost === "::") {
-    return `http://${formatHost(endpointHost)}:${nextPort}`;
-  }
-  return `http://${formatHost(bindHost)}:${nextPort}`;
 }
 
 export function createAgentEndpointUrl(

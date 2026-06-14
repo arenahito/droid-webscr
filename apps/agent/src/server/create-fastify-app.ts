@@ -4,7 +4,7 @@ import { AdbProvider } from "@droid-webscr/adb";
 import { AgentConfig, validateAgentConfig } from "@droid-webscr/config";
 import { encodeFrame } from "@droid-webscr/protocol";
 import { readFrames } from "@droid-webscr/transport";
-import Fastify, { FastifyInstance } from "fastify";
+import Fastify, { FastifyInstance, FastifyRequest } from "fastify";
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, sep } from "node:path";
@@ -320,7 +320,7 @@ function closeBrowserSocket(
   socket.close?.(code, reason);
 }
 
-function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider | undefined): void {
+export function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider | undefined): void {
   if (!webUi) {
     return;
   }
@@ -328,6 +328,12 @@ function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider | undefi
     const path = request.url.split("?")[0] ?? "/";
     if (path.startsWith("/api/") || path === "/api" || path.startsWith("/ws/") || path === "/ws") {
       return reply.code(404).send({ error: "Not found" });
+    }
+    if (!isLocalWebUiRequest(request)) {
+      return reply.code(404).send({ error: "Not found" });
+    }
+    if (webUi.renderIndex && isWebUiDocumentPath(path)) {
+      return reply.type("text/html; charset=utf-8").send(await webUi.renderIndex(request.url));
     }
     const file = await readWebUiFile(webUi, path);
     if (file) {
@@ -342,6 +348,23 @@ function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider | undefi
     }
     return reply.code(404).send({ error: "Not found" });
   });
+}
+
+export function isLocalWebUiRequest(request: FastifyRequest): boolean {
+  return isLocalAddress(request.ip) || isLocalAddress(request.socket.remoteAddress);
+}
+
+function isLocalAddress(address: string | undefined): boolean {
+  return (
+    address === "127.0.0.1" ||
+    address === "::1" ||
+    address === "::ffff:127.0.0.1" ||
+    address === "localhost"
+  );
+}
+
+function isWebUiDocumentPath(path: string): boolean {
+  return path === "/" || !path.includes(".");
 }
 
 async function readWebUiFile(

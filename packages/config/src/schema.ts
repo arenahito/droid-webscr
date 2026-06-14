@@ -30,7 +30,7 @@ const schema = z
         enabled: z.boolean().default(false),
       })
       .default({ enabled: false }),
-    port: z.number().int().min(1).max(65_535).default(7391),
+    port: z.number().int().min(0).max(65_535).default(7391),
   })
   .strict();
 

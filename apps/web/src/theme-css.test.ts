@@ -82,15 +82,6 @@ describe("theme CSS contract", () => {
     expect(buttonComponent).not.toContain("disabled:pointer-events-none");
   });
 
-  it("keeps access panel heading spacing aligned with sidebar sections", async () => {
-    const css = await readCss();
-    const sidebarSectionBlock = cssBlock(css, ".sidebar-section");
-    const accessPanelBlock = cssBlock(css, ".access-panel");
-
-    expect(sidebarSectionBlock).toContain("gap: 10px");
-    expect(accessPanelBlock).toContain("gap: 10px");
-  });
-
   it("styles app scrollbars as a thin shared chrome control", async () => {
     const css = await readCss();
     const globalBlock = cssBlock(css, "*");

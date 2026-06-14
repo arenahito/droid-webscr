@@ -4,6 +4,8 @@ import net from "node:net";
 import { pathToFileURL } from "node:url";
 import { isDirectRun, startAgent } from "./main.js";
 
+const agentAuthHeader = { authorization: "Bearer secret" };
+
 describe("isDirectRun", () => {
   it("accepts the current module URL when Node runs the compiled entrypoint", () => {
     const entrypoint = "C:/repo/apps/agent/dist/main.js";
@@ -24,7 +26,7 @@ describe("startAgent", () => {
     const runtime = await startAgent({
       adbProvider: new FakeAdbProvider([]),
       config: {
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "127.0.0.1",
         clipboard: { enabled: false },
         port,
@@ -34,25 +36,27 @@ describe("startAgent", () => {
 
     const rebind = await fetch(`http://127.0.0.1:${port}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "localhost", port }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
     const noOpRebind = await fetch(`http://localhost:${port}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "localhost", port }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
     await fetch(`http://localhost:${port}/api/config/clipboard`, {
       body: JSON.stringify({ enabled: true }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
     await fetch(`http://localhost:${port}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "127.0.0.1", port: secondPort }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
-    const config = await fetch(`http://127.0.0.1:${secondPort}/api/config`);
+    const config = await fetch(`http://127.0.0.1:${secondPort}/api/config`, {
+      headers: agentAuthHeader,
+    });
 
     expect(rebind.status).toBe(200);
     expect(noOpRebind.status).toBe(200);
@@ -72,7 +76,7 @@ describe("startAgent", () => {
     const runtime = await startAgent({
       adbProvider: new FakeAdbProvider([]),
       config: {
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "127.0.0.1",
         clipboard: { enabled: false },
         port: firstPort,
@@ -82,15 +86,17 @@ describe("startAgent", () => {
 
     const firstRebind = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "127.0.0.1", port: secondPort }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
     const secondRebind = await fetch(`http://127.0.0.1:${secondPort}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "127.0.0.1", port: firstPort }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
-    const config = await fetch(`http://127.0.0.1:${firstPort}/api/config`);
+    const config = await fetch(`http://127.0.0.1:${firstPort}/api/config`, {
+      headers: agentAuthHeader,
+    });
 
     expect(firstRebind.status).toBe(200);
     expect(secondRebind.status).toBe(200);
@@ -111,7 +117,7 @@ describe("startAgent", () => {
     const runtime = await startAgent({
       adbProvider: new FakeAdbProvider([]),
       config: {
-        authToken: undefined,
+        authToken: "secret",
         bindHost: "127.0.0.1",
         clipboard: { enabled: false },
         port: firstPort,
@@ -121,7 +127,7 @@ describe("startAgent", () => {
 
     const failed = await fetch(`http://127.0.0.1:${firstPort}/api/config/bind`, {
       body: JSON.stringify({ bindHost: "127.0.0.1", port: occupiedPort }),
-      headers: { "content-type": "application/json" },
+      headers: { ...agentAuthHeader, "content-type": "application/json" },
       method: "PATCH",
     });
     const health = await fetch(`http://127.0.0.1:${firstPort}/api/health`);

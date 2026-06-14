@@ -63,20 +63,21 @@ export function registerRoutes(app: FastifyInstance, context: RouteContext): voi
     if (!bindHost) {
       return reply.code(400).send({ error: "bindHost is required" });
     }
-    if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+    if (!Number.isInteger(nextPort) || nextPort < 0 || nextPort > 65535) {
       return reply.code(400).send({ error: "port must be a valid TCP port" });
     }
     if (!isLocalBind(bindHost) && !context.config.authToken) {
       return reply.code(400).send({ error: "Non-local bind addresses require authToken." });
     }
     await context.rebindRuntime?.(bindHost, nextPort);
+    const config = runtimeConfig();
     const response = {
-      bindHost,
-      clipboardEnabled: runtimeConfig().clipboard.enabled,
-      message: `Agent is now listening on ${bindHost}:${nextPort}.`,
+      bindHost: config.bindHost,
+      clipboardEnabled: config.clipboard.enabled,
+      message: `Agent is now listening on ${config.bindHost}:${config.port}.`,
       ok: true,
-      port: nextPort,
-      shareUrl: createShareUrl(bindHost, nextPort),
+      port: config.port,
+      shareUrl: createShareUrl(config.bindHost, config.port),
     };
     return response;
   });

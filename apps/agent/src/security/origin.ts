@@ -14,14 +14,11 @@ export function isAllowedOrigin(
       return false;
     }
     if (!isAllowedHost(url.host, config)) {
-      return false;
+      if (!(requestHost && config.authToken && isLocalHost(url.host))) {
+        return false;
+      }
     }
-    if (
-      requestHost &&
-      isLocalHost(url.host) &&
-      isLocalHost(requestHost) &&
-      samePort(url, requestHost)
-    ) {
+    if (requestHost && config.authToken && isLocalHost(url.host)) {
       return true;
     }
     return requestHost ? sameEndpoint(url, requestHost) : true;

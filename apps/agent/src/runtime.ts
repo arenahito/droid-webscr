@@ -71,7 +71,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
       }
       throw error;
     }
-    runtimeConfig = { ...runtimeConfig, bindHost, port };
+    runtimeConfig = { ...runtimeConfig, bindHost, port: readBoundPort(nextApp, port) };
     currentApp = nextApp;
     /* v8 ignore next 3 -- startup has no previous app; rebind paths cover scheduled close. */
     if (previousApp) {
@@ -87,6 +87,7 @@ export async function startAgent(options: StartAgentOptions = {}) {
 
   currentApp = await createRuntimeApp(runtimeConfig);
   await currentApp.listen({ host: runtimeConfig.bindHost, port: runtimeConfig.port });
+  runtimeConfig = { ...runtimeConfig, port: readBoundPort(currentApp, runtimeConfig.port) };
   return {
     close: async () => {
       await rebindQueue;
@@ -129,6 +130,14 @@ async function listenWithRetry(
     await delay(retryDelayMs);
     await listenWithRetry(app, host, port, attempt + 1);
   }
+}
+
+function readBoundPort(app: AgentFastifyApp, fallbackPort: number): number {
+  const address = app.server.address();
+  if (typeof address === "object" && address?.port) {
+    return address.port;
+  }
+  return fallbackPort;
 }
 
 function scheduleClose(

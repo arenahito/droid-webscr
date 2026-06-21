@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/arenahito/droid-webscr/compare/v0.3.0...v0.4.0) (2026-06-21)
+
+
+### Features
+
+* add stable web controls to droid-webscr skill ([508e852](https://github.com/arenahito/droid-webscr/commit/508e8520d846d8730475c273ff70971212406e29))
+* **web:** add arbitrary key event controls ([92c33e6](https://github.com/arenahito/droid-webscr/commit/92c33e6c5ad7340b5afe4c79b1713304cdbf0d23))
+
+
+### Bug Fixes
+
+* allow release-please version bumps in config test ([d87540f](https://github.com/arenahito/droid-webscr/commit/d87540f800545d3b708e2e2403582486b1f77e30))
+* release changes across shipped sources ([b8738fd](https://github.com/arenahito/droid-webscr/commit/b8738fd0723a3cea4244adfd4800fc0a44a379fb))
+* remove release config mirror test ([0a0155b](https://github.com/arenahito/droid-webscr/commit/0a0155b3b530e306635bed6b97fa4d939b314986))
+
 ## [0.3.0](https://github.com/arenahito/droid-webscr/compare/v0.2.1...v0.3.0) (2026-06-14)
 
 

@@ -14,7 +14,7 @@
     "format:check": "oxfmt --config oxfmt.json --check .",
     "type-check": "turbo type-check",
     "typecheck": "pnpm type-check",
-    "test": "vitest run --config vitest.workspace.ts && node --test tools/android-emulator-verify.test.mjs",
+    "test": "vitest run --config vitest.workspace.ts && node --test tools/*.test.mjs",
     "test:coverage": "vitest run --coverage --config vitest.workspace.ts",
     "package:build": "pnpm android:build && pnpm --filter @droid-webscr/web... build && pnpm --filter @arenahito/droid-webscr build",
     "package:dry-run": "pnpm package:build && pnpm --dir apps/cli pack --dry-run",

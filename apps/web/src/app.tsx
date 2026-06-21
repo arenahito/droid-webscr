@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Check,
   Home,
+  Keyboard,
   Menu,
   MonitorSmartphone,
   MoreVertical,
@@ -24,6 +25,7 @@ import {
 } from "lucide-react";
 import {
   createFrameHeader,
+  createKeyControlFrame,
   decodeFrame,
   createSystemControlFrame,
   createVideoReconfigureFrame,
@@ -81,7 +83,7 @@ export interface InitialAgentConfig {
 type NormalizedLogLevel = "debug" | "error" | "info" | "verbose" | "warn";
 type LogLevel = "all" | Exclude<NormalizedLogLevel, "verbose">;
 type DeviceLogStatus = "idle" | "connecting" | "tailing" | "error";
-type DialogKind = "endpoint" | "power" | undefined;
+type DialogKind = "endpoint" | "keyevent" | "power" | undefined;
 
 interface PinchGesture {
   readonly browserPointerId: number;
@@ -119,6 +121,8 @@ const phoneControlRailWidthPx = 46;
 const pointerDragFrameIntervalMs = 8;
 const pointerDragInterpolationStepPx = 12;
 const syntheticPinchRadiusPx = 32;
+const androidMenuKeyCode = 82;
+const maxAndroidKeyCode = 65_535;
 
 const designInitialLogs: readonly string[] = [
   "10:42:10.231 INFO   stream     Starting stream: 1344x2992@30fps bitrate=4Mbps transport=USB",
@@ -191,6 +195,7 @@ export function DroidWebscrApp({
   const deviceLogSerialRef = React.useRef<string | undefined>(undefined);
   const pinchGestureRef = React.useRef<PinchGesture | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
+  const menuShortcutKeyDownRef = React.useRef(false);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
   const useDesignApiFallback = shouldUseDesignApiFallback(client) && !agentBaseUrl;
   const [viewportRef, viewportSize] = useElementSize<HTMLElement>();
@@ -527,6 +532,31 @@ export function DroidWebscrApp({
     [notify, sendControlFrame],
   );
 
+  const sendAndroidKeyEvent = React.useCallback(
+    (keyCode: number) => {
+      void sendControlFrame(
+        createKeyControlFrame({
+          action: "down",
+          keyCode,
+          metaState: 0,
+          repeat: 0,
+          sequence: nextSequence(sequenceRef),
+        }),
+      );
+      void sendControlFrame(
+        createKeyControlFrame({
+          action: "up",
+          keyCode,
+          metaState: 0,
+          repeat: 0,
+          sequence: nextSequence(sequenceRef),
+        }),
+      );
+      notify(`Sent key event ${keyCode}`);
+    },
+    [notify, sendControlFrame],
+  );
+
   const requestSystemAction = React.useCallback(
     (action: SystemControlAction) => {
       if (action === "power") {
@@ -537,6 +567,45 @@ export function DroidWebscrApp({
     },
     [sendSystemAction],
   );
+
+  const requestKeyEvent = React.useCallback(() => {
+    setDialog("keyevent");
+    setDialogValue("");
+  }, []);
+
+  React.useEffect(() => {
+    const sendMenuShortcutOnKeyDown = (event: KeyboardEvent) => {
+      if (!shouldHandleMenuShortcut(event)) {
+        return;
+      }
+      event.preventDefault();
+      menuShortcutKeyDownRef.current = true;
+      sendAndroidKeyEvent(androidMenuKeyCode);
+    };
+
+    const sendMenuShortcutOnKeyUp = (event: KeyboardEvent) => {
+      if (!isMenuShortcutKey(event)) {
+        if (event.key === "Control" || event.key === "Meta") {
+          menuShortcutKeyDownRef.current = false;
+        }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !isTextEditingTarget(event.target)) {
+        event.preventDefault();
+        if (!menuShortcutKeyDownRef.current) {
+          sendAndroidKeyEvent(androidMenuKeyCode);
+        }
+      }
+      menuShortcutKeyDownRef.current = false;
+    };
+
+    window.addEventListener("keydown", sendMenuShortcutOnKeyDown, true);
+    window.addEventListener("keyup", sendMenuShortcutOnKeyUp, true);
+    return () => {
+      window.removeEventListener("keydown", sendMenuShortcutOnKeyDown, true);
+      window.removeEventListener("keyup", sendMenuShortcutOnKeyUp, true);
+    };
+  }, [sendAndroidKeyEvent]);
 
   const requestRotation = React.useCallback(
     (delta: number) => {
@@ -605,6 +674,16 @@ export function DroidWebscrApp({
     if (dialog === "endpoint" && !value) {
       return;
     }
+    if (dialog === "keyevent") {
+      const keyCode = parseAndroidKeyCode(value);
+      if (keyCode === undefined) {
+        return;
+      }
+      sendAndroidKeyEvent(keyCode);
+      setDialog(undefined);
+      setDialogValue("");
+      return;
+    }
     try {
       if (dialog === "endpoint") {
         await agentClient.connectEndpoint?.(value);
@@ -623,7 +702,15 @@ export function DroidWebscrApp({
         type: "failed",
       });
     }
-  }, [agentClient, dialog, dialogValue, notify, refreshDeviceList, sendSystemAction]);
+  }, [
+    agentClient,
+    dialog,
+    dialogValue,
+    notify,
+    refreshDeviceList,
+    sendAndroidKeyEvent,
+    sendSystemAction,
+  ]);
 
   const sendKey = React.useCallback(
     (event: React.KeyboardEvent) => {
@@ -1051,6 +1138,7 @@ export function DroidWebscrApp({
             />
             <AndroidControls
               sessionActive={controlReady}
+              onKeyEvent={requestKeyEvent}
               onRotate={requestRotation}
               onSystemAction={requestSystemAction}
             />
@@ -1686,10 +1774,12 @@ function DisconnectedPhonePlaceholder({
 }
 
 function AndroidControls({
+  onKeyEvent,
   onRotate,
   onSystemAction,
   sessionActive,
 }: {
+  readonly onKeyEvent: () => void;
   readonly onRotate: (delta: number) => void;
   readonly onSystemAction: (action: SystemControlAction) => void;
   readonly sessionActive: boolean;
@@ -1722,6 +1812,15 @@ function AndroidControls({
       </Button>
       <Button aria-label="Rotate right" onClick={() => onRotate(90)} size="icon" variant="outline">
         <RotateCw aria-hidden="true" />
+      </Button>
+      <Button
+        aria-label="Key event"
+        disabled={!sessionActive}
+        onClick={onKeyEvent}
+        size="icon"
+        variant="outline"
+      >
+        <Keyboard aria-hidden="true" />
       </Button>
       {controls.slice(3).map(([label, action, Icon]) => (
         <Button
@@ -1962,7 +2061,13 @@ function Dialog({
   readonly onValueChange: (value: string) => void;
   readonly value: string;
 }): React.ReactElement {
-  const title = kind === "endpoint" ? "Connect by endpoint" : "Power action";
+  const title =
+    kind === "endpoint"
+      ? "Connect by endpoint"
+      : kind === "keyevent"
+        ? "Key event"
+        : "Power action";
+  const keyCode = kind === "keyevent" ? parseAndroidKeyCode(value.trim()) : undefined;
   return (
     <div
       aria-label={title}
@@ -1989,6 +2094,21 @@ function Dialog({
               <p>Use this when the device is not already visible in adb devices.</p>
             </>
           ) : null}
+          {kind === "keyevent" ? (
+            <label className="field">
+              Android keyCode
+              <input
+                autoFocus
+                inputMode="numeric"
+                max={maxAndroidKeyCode}
+                min={0}
+                onChange={(event) => onValueChange(event.target.value)}
+                placeholder="82"
+                type="number"
+                value={value}
+              />
+            </label>
+          ) : null}
           {kind === "power" ? (
             <p>
               Send a power-key event to the selected Android device. This is a guarded system
@@ -2004,6 +2124,16 @@ function Dialog({
               </Button>
               <Button onClick={onSubmit} variant="outline">
                 Send power
+              </Button>
+            </>
+          ) : null}
+          {kind === "keyevent" ? (
+            <>
+              <Button onClick={onCancel} variant="outline">
+                Cancel
+              </Button>
+              <Button disabled={keyCode === undefined} onClick={onSubmit}>
+                Send key event
               </Button>
             </>
           ) : null}
@@ -2111,6 +2241,41 @@ function parseUrlHost(url: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function parseAndroidKeyCode(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const keyCode = Number(value);
+  return Number.isInteger(keyCode) && keyCode >= 0 && keyCode <= maxAndroidKeyCode
+    ? keyCode
+    : undefined;
+}
+
+function shouldHandleMenuShortcut(event: KeyboardEvent): boolean {
+  return Boolean(
+    !event.defaultPrevented &&
+    isMenuShortcutKey(event) &&
+    (event.ctrlKey || event.metaKey) &&
+    !isTextEditingTarget(event.target),
+  );
+}
+
+function isMenuShortcutKey(event: KeyboardEvent): boolean {
+  return event.key.toLowerCase() === "m" || event.code === "KeyM";
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.closest(".hidden-text-input")) {
+    return false;
+  }
+  return Boolean(
+    target.closest("input, textarea, select") ?? target.closest("[contenteditable='true']"),
+  );
 }
 
 function persistAgentBaseUrl(

@@ -270,6 +270,7 @@ describe("DroidWebscrApp", () => {
       "Volume down",
       "Rotate left",
       "Rotate right",
+      "Key event",
       "Back",
       "Home",
       "Task list",
@@ -648,6 +649,142 @@ describe("DroidWebscrApp", () => {
     const taskList = decodeFrame(socket.sent[2]!);
     expect(volumeDown.ok && [...volumeDown.value.payload]).toEqual([4]);
     expect(taskList.ok && [...taskList.value.payload]).toEqual([2]);
+  });
+
+  it("sends arbitrary Android key events from the key event dialog", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    await user.click(screen.getByRole("button", { name: "Key event" }));
+
+    expect(screen.getByRole("dialog", { name: "Key event" })).toBeInTheDocument();
+    const input = screen.getByRole("spinbutton", { name: "Android keyCode" });
+    expect(screen.getByRole("button", { name: "Send key event" })).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "65536" } });
+    expect(screen.getByRole("button", { name: "Send key event" })).toBeDisabled();
+    expect(socket.sent).toHaveLength(1);
+
+    fireEvent.change(input, { target: { value: "82" } });
+    await user.click(screen.getByRole("button", { name: "Send key event" }));
+
+    expect(screen.queryByRole("dialog", { name: "Key event" })).not.toBeInTheDocument();
+    expect(socket.sent.slice(1).map(decodeKeyPayload)).toEqual([
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+    ]);
+  });
+
+  it("sends Menu key events from the emulator shortcut without stealing text input", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+
+    fireEvent.keyDown(window, { ctrlKey: true, key: "m" });
+    fireEvent.keyDown(window, { key: "m", metaKey: true });
+    expect(socket.sent.slice(1).map(decodeKeyPayload)).toEqual([
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+    ]);
+
+    const textInput = screen.getByLabelText("Android text input");
+    textInput.focus();
+    fireEvent.keyDown(textInput, { ctrlKey: true, key: "m" });
+    fireEvent.keyUp(textInput, { ctrlKey: true, key: "m" });
+    expect(socket.sent.slice(1).map(decodeKeyPayload)).toEqual([
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+    ]);
+
+    fireEvent.keyUp(window, { code: "KeyM", ctrlKey: true, key: "" });
+    expect(socket.sent.slice(1).map(decodeKeyPayload)).toEqual([
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+    ]);
+
+    fireEvent.keyDown(window, { ctrlKey: true, key: "m", repeat: true });
+    expect(socket.sent.slice(1).map(decodeKeyPayload)).toEqual([
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 0, keyCode: 82, metaState: 0, repeat: 0 },
+      { action: 1, keyCode: 82, metaState: 0, repeat: 0 },
+    ]);
+
+    const sentAfterShortcuts = socket.sent.length;
+    await user.click(screen.getByRole("button", { name: "Key event" }));
+    fireEvent.keyDown(screen.getByRole("spinbutton", { name: "Android keyCode" }), {
+      ctrlKey: true,
+      key: "m",
+    });
+    expect(socket.sent).toHaveLength(sentAfterShortcuts);
   });
 
   it("reports device rotation failures while a session is connected", async () => {
@@ -3068,6 +3205,29 @@ function decodePointerButtons(frame: Uint8Array): number {
     decoded.value.payload.byteLength,
   );
   return view.getUint16(14, false);
+}
+
+function decodeKeyPayload(frame: Uint8Array): {
+  readonly action: number;
+  readonly keyCode: number;
+  readonly metaState: number;
+  readonly repeat: number;
+} {
+  const decoded = decodeFrame(frame);
+  if (!decoded.ok || decoded.value.header.type !== MessageType.ControlKey) {
+    throw new Error("Expected a key control frame.");
+  }
+  const view = new DataView(
+    decoded.value.payload.buffer,
+    decoded.value.payload.byteOffset,
+    decoded.value.payload.byteLength,
+  );
+  return {
+    action: view.getUint8(0),
+    keyCode: view.getUint16(2, false),
+    metaState: view.getUint32(4, false),
+    repeat: view.getUint32(8, false),
+  };
 }
 
 function setLogScrollMetrics(

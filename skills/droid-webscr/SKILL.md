@@ -74,16 +74,28 @@ Use browser automation for the droid-webscr web UI:
 
 - Navigate to the printed `Web UI:` URL.
 - Wait for the device list to load.
-- Select the intended device by model or serial.
+- Prefer stable automation attributes over DOM text parsing for Web UI controls:
+  - Use `[data-control-id="device.select"][data-device-serial="<serial>"]` to select a device.
+  - Use `[data-control-id="session.start"]` and `[data-control-id="session.stop"]` to start and stop sessions.
+  - Use `[data-control-id="device.refresh"]` and `[data-control-id="device.connectEndpoint"]` for device discovery.
+  - Use `[data-control-id="android.back"]`, `android.home`, `android.overview`, `android.power`, `android.volumeUp`, `android.volumeDown`, `android.rotateLeft`, `android.rotateRight`, and `android.keyEvent` for Android hardware controls.
+  - Use `[data-control-id="log.expand"]`, `log.collapse`, `log.start`, `log.stop`, and `log.clear` for device-log controls.
+  - Fall back to accessible role/name queries only when a stable control ID is not present.
 - Keep default video settings unless bitrate or frame rate matters to the test.
 - Start the session.
 - Wait for `Video ready`, `Receiving Android video`, or a visibly live Android screen.
-- Click Android controls through the video canvas.
+- Treat `Video ready` and `Receiving Android video` as supporting evidence only. They do not prove the Android app workflow by themselves.
+- Confirm Android app behavior in the Android screen area, not in the surrounding Web UI or log drawer:
+  - Inspect `[data-control-id="android.viewport"]` for the framed Android display area.
+  - Use `[data-control-id="android.videoCanvas"]` as the input surface for Android app taps, drags, keyboard focus, and cropped visual checks.
+  - Android app buttons and text are pixels inside the video canvas, not Web DOM nodes. Do not parse the Web DOM to find Android app controls.
+  - When clicking inside Android, compute coordinates relative to the video canvas and account for scaling, rotation, and letterboxing.
+- Click Android app controls through the video canvas after visually locating them in the Android viewport.
 - Type with the browser keyboard path when text input is part of the test.
 - Use the UI hardware controls for Back, Home, Overview, Power, volume, and rotation actions.
 - Stop the session at the end unless the user asks to leave it running.
 
-Prefer visible Android state, screen transitions, UI text, and device logs as assertions. A loaded droid-webscr page is not enough; the test should prove the Android screen is live and controllable from the browser.
+Prefer visible Android state in the video canvas, screen transitions, UI text inside the Android viewport, and device logs as assertions. A loaded droid-webscr page or a ready status label is not enough; the test should prove the Android screen is live and controllable from the browser.
 
 ## ADB Usage
 
@@ -104,6 +116,7 @@ Collect only evidence that helps the user trust the browser-driven result:
 - The `Agent API:` URL when it differs from the Web UI URL.
 - The selected device model or serial.
 - Screenshots before and after meaningful Android interactions.
+- Cropped screenshots of the `android.viewport` or `android.videoCanvas` area when page-level screenshots would make the Android result ambiguous.
 - Relevant droid-webscr status text.
 - Short device log excerpts when logs explain the tested behavior or failure.
 - Terminal errors only when they explain why the browser flow failed.

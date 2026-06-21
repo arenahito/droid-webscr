@@ -261,6 +261,13 @@ describe("DroidWebscrApp", () => {
     expect(screen.getByRole("button", { name: "Connect by endpoint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
     expect(screen.getByLabelText("Android screen viewport")).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="session.start"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="device.refresh"]')).toBeInTheDocument();
+    expect(
+      document.querySelector('[data-control-id="device.connectEndpoint"]'),
+    ).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="android.viewport"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="android.videoCanvas"]')).toBeInTheDocument();
     const railButtons = screen
       .getByRole("navigation", { name: "Android hardware controls" })
       .querySelectorAll("button");
@@ -277,6 +284,16 @@ describe("DroidWebscrApp", () => {
     ]);
     expect(screen.getByRole("button", { name: "Power" })).toHaveClass("danger");
     expect(screen.getByRole("button", { name: "Rotate right" })).not.toHaveClass("danger");
+    expect(document.querySelector('[data-control-id="android.power"]')).toHaveClass("danger");
+    expect(document.querySelector('[data-control-id="android.volumeUp"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.volumeDown"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.rotateLeft"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="android.rotateRight"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="android.keyEvent"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.back"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.home"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.overview"]')).toBeDisabled();
+    expect(document.querySelector('[data-control-id="log.expand"]')).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Keyboard" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
@@ -292,6 +309,65 @@ describe("DroidWebscrApp", () => {
         .querySelector<HTMLElement>(".phone-shell")
         ?.style.getPropertyValue("--phone-screen-aspect"),
     ).toBe("9 / 20");
+  });
+
+  it("exposes stable control ids and device serials for browser automation", async () => {
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async (serial) => ({
+            sessionId: `s-${serial}`,
+            serial,
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+            {
+              authorizationState: "authorized",
+              model: "Pixel 6",
+              serial: "R5CW70ABC12",
+              transportKind: "usb",
+            },
+          ],
+        }}
+        storage={createMemoryStorage()}
+      />,
+    );
+
+    await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ });
+
+    expect(document.querySelector('[data-control-id="device.select"]')).toHaveAttribute(
+      "data-device-serial",
+      "emulator-5554",
+    );
+    expect(
+      document.querySelector('[data-control-id="device.menu"][data-device-serial="R5CW70ABC12"]'),
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Open Pixel 6 menu" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Start session" })).toHaveAttribute(
+      "data-control-id",
+      "device.startSession",
+    );
+    expect(within(menu).getByRole("menuitem", { name: "Start session" })).toHaveAttribute(
+      "data-device-serial",
+      "R5CW70ABC12",
+    );
+    expect(within(menu).getByRole("menuitem", { name: "Disconnect" })).toHaveAttribute(
+      "data-control-id",
+      "device.disconnect",
+    );
+    expect(within(menu).getByRole("menuitem", { name: "Disconnect" })).toHaveAttribute(
+      "data-device-serial",
+      "R5CW70ABC12",
+    );
   });
 
   it("ignores duplicate start requests while a session is starting", async () => {

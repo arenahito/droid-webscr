@@ -1248,7 +1248,12 @@ function Topbar({
         {session ? `Session ${session.sessionId}` : "No session"}
       </span>
       {session ? (
-        <Button className="session-toggle session-running" onClick={onStop} variant="outline">
+        <Button
+          className="session-toggle session-running"
+          data-control-id="session.stop"
+          onClick={onStop}
+          variant="outline"
+        >
           <Square aria-hidden="true" data-icon="inline-start" />
           Stop
         </Button>
@@ -1256,6 +1261,7 @@ function Topbar({
         <Button
           aria-label="Start"
           className="session-toggle"
+          data-control-id="session.start"
           disabled={!canStart}
           onClick={onStart}
         >
@@ -1376,6 +1382,8 @@ function Sidebar({
                 <div className="device-card-main">
                   <button
                     aria-label={`${device.model ?? "Android device"} ${device.serial}`}
+                    data-control-id="device.select"
+                    data-device-serial={device.serial}
                     disabled={sessionActive && selectedSerial !== device.serial}
                     onClick={() => onSelect(device.serial)}
                     type="button"
@@ -1396,6 +1404,8 @@ function Sidebar({
                   <Button
                     aria-expanded={openSerial === device.serial}
                     aria-label={`Open ${device.model ?? device.serial} menu`}
+                    data-control-id="device.menu"
+                    data-device-serial={device.serial}
                     disabled={sessionActive}
                     onClick={() => {
                       setOpenSerial((current) =>
@@ -1424,6 +1434,8 @@ function Sidebar({
                   role="menu"
                 >
                   <button
+                    data-control-id="device.startSession"
+                    data-device-serial={device.serial}
                     disabled={sessionActive}
                     onClick={() => {
                       onStartSession(device);
@@ -1436,6 +1448,8 @@ function Sidebar({
                   </button>
                   <button
                     className="danger"
+                    data-control-id="device.disconnect"
+                    data-device-serial={device.serial}
                     disabled={sessionActive}
                     onClick={() => {
                       setOpenSerial(undefined);
@@ -1454,11 +1468,21 @@ function Sidebar({
       </div>
       <div className="sidebar-section">
         <h2>ADD DEVICE</h2>
-        <Button disabled={sessionActive} onClick={onRefreshDevices} variant="outline">
+        <Button
+          data-control-id="device.refresh"
+          disabled={sessionActive}
+          onClick={onRefreshDevices}
+          variant="outline"
+        >
           <RefreshCw aria-hidden="true" data-icon="inline-start" />
           Refresh devices
         </Button>
-        <Button disabled={sessionActive} onClick={onConnectEndpoint} variant="secondary">
+        <Button
+          data-control-id="device.connectEndpoint"
+          disabled={sessionActive}
+          onClick={onConnectEndpoint}
+          variant="secondary"
+        >
           <Wifi aria-hidden="true" data-icon="inline-start" />
           Connect by endpoint
         </Button>
@@ -1503,7 +1527,11 @@ function AndroidViewport({
   const landscape = displaySize.width > displaySize.height;
   const phoneStyle = createPhoneStyle(displaySize, viewportSize, landscape);
   return (
-    <section aria-label="Android screen viewport" className="stage">
+    <section
+      aria-label="Android screen viewport"
+      className="stage"
+      data-control-id="android.viewport"
+    >
       <div
         className={cn(
           "phone-shell",
@@ -1519,6 +1547,7 @@ function AndroidViewport({
           <canvas
             aria-label="Android video canvas"
             className="video-canvas"
+            data-control-id="android.videoCanvas"
             onBeforeInput={onBeforeInput}
             onInput={onBeforeInput}
             onKeyDown={onKeyDown}
@@ -1784,20 +1813,23 @@ function AndroidControls({
   readonly onSystemAction: (action: SystemControlAction) => void;
   readonly sessionActive: boolean;
 }): React.ReactElement {
-  const controls: ReadonlyArray<readonly [string, SystemControlAction, typeof Power, boolean?]> = [
-    ["Power", "power", Power, true],
-    ["Volume up", "volume-up", Volume2],
-    ["Volume down", "volume-down", Volume1],
-    ["Back", "back", ArrowLeft],
-    ["Home", "home", Home],
-    ["Task list", "overview", Square],
+  const controls: ReadonlyArray<
+    readonly [string, SystemControlAction, typeof Power, string, boolean?]
+  > = [
+    ["Power", "power", Power, "android.power", true],
+    ["Volume up", "volume-up", Volume2, "android.volumeUp"],
+    ["Volume down", "volume-down", Volume1, "android.volumeDown"],
+    ["Back", "back", ArrowLeft, "android.back"],
+    ["Home", "home", Home, "android.home"],
+    ["Task list", "overview", Square, "android.overview"],
   ];
   return (
     <nav aria-label="Android hardware controls" className="control-rail">
-      {controls.slice(0, 3).map(([label, action, Icon, danger]) => (
+      {controls.slice(0, 3).map(([label, action, Icon, controlId, danger]) => (
         <Button
           aria-label={label}
           className={danger ? "danger" : undefined}
+          data-control-id={controlId}
           disabled={!sessionActive}
           key={label}
           onClick={() => onSystemAction(action)}
@@ -1807,14 +1839,27 @@ function AndroidControls({
           <Icon aria-hidden="true" />
         </Button>
       ))}
-      <Button aria-label="Rotate left" onClick={() => onRotate(-90)} size="icon" variant="outline">
+      <Button
+        aria-label="Rotate left"
+        data-control-id="android.rotateLeft"
+        onClick={() => onRotate(-90)}
+        size="icon"
+        variant="outline"
+      >
         <RotateCcw aria-hidden="true" />
       </Button>
-      <Button aria-label="Rotate right" onClick={() => onRotate(90)} size="icon" variant="outline">
+      <Button
+        aria-label="Rotate right"
+        data-control-id="android.rotateRight"
+        onClick={() => onRotate(90)}
+        size="icon"
+        variant="outline"
+      >
         <RotateCw aria-hidden="true" />
       </Button>
       <Button
         aria-label="Key event"
+        data-control-id="android.keyEvent"
         disabled={!sessionActive}
         onClick={onKeyEvent}
         size="icon"
@@ -1822,9 +1867,10 @@ function AndroidControls({
       >
         <Keyboard aria-hidden="true" />
       </Button>
-      {controls.slice(3).map(([label, action, Icon]) => (
+      {controls.slice(3).map(([label, action, Icon, controlId]) => (
         <Button
           aria-label={label}
+          data-control-id={controlId}
           disabled={!sessionActive}
           key={label}
           onClick={() => onSystemAction(action)}
@@ -1964,6 +2010,7 @@ function LogDrawer({
             <Button
               aria-label={enabled ? "Stop log" : "Start log"}
               className="log-tail-toggle"
+              data-control-id={enabled ? "log.stop" : "log.start"}
               disabled={!canStart}
               onClick={() => onLogEnabledChange(!enabled)}
               size="sm"
@@ -1992,7 +2039,13 @@ function LogDrawer({
               />
               Wrap lines
             </label>
-            <Button aria-label="Clear logs" onClick={onClear} size="sm" variant="outline">
+            <Button
+              aria-label="Clear logs"
+              data-control-id="log.clear"
+              onClick={onClear}
+              size="sm"
+              variant="outline"
+            >
               <Trash2 aria-hidden="true" data-icon="inline-start" />
               Clear
             </Button>
@@ -2003,6 +2056,7 @@ function LogDrawer({
           aria-expanded={!collapsed}
           aria-label={collapsed ? "Expand device log" : "Collapse device log"}
           className="log-collapse-toggle"
+          data-control-id={collapsed ? "log.expand" : "log.collapse"}
           onClick={() => onCollapsedChange(!collapsed)}
           size="icon"
           title={collapsed ? "Expand device log" : "Collapse device log"}
@@ -2086,6 +2140,7 @@ function Dialog({
                 ADB endpoint
                 <input
                   autoFocus
+                  data-control-id="device.endpointInput"
                   onChange={(event) => onValueChange(event.target.value)}
                   placeholder="192.168.1.40:5555"
                   value={value}
@@ -2099,6 +2154,7 @@ function Dialog({
               Android keyCode
               <input
                 autoFocus
+                data-control-id="android.keyCodeInput"
                 inputMode="numeric"
                 max={maxAndroidKeyCode}
                 min={0}
@@ -2119,30 +2175,36 @@ function Dialog({
         <div className="dialog-actions">
           {kind === "power" ? (
             <>
-              <Button onClick={onCancel} variant="outline">
+              <Button data-control-id="dialog.cancel" onClick={onCancel} variant="outline">
                 Cancel
               </Button>
-              <Button onClick={onSubmit} variant="outline">
+              <Button data-control-id="android.power.send" onClick={onSubmit} variant="outline">
                 Send power
               </Button>
             </>
           ) : null}
           {kind === "keyevent" ? (
             <>
-              <Button onClick={onCancel} variant="outline">
+              <Button data-control-id="dialog.cancel" onClick={onCancel} variant="outline">
                 Cancel
               </Button>
-              <Button disabled={keyCode === undefined} onClick={onSubmit}>
+              <Button
+                data-control-id="android.keyCodeSend"
+                disabled={keyCode === undefined}
+                onClick={onSubmit}
+              >
                 Send key event
               </Button>
             </>
           ) : null}
           {kind === "endpoint" ? (
             <>
-              <Button onClick={onCancel} variant="outline">
+              <Button data-control-id="dialog.cancel" onClick={onCancel} variant="outline">
                 Cancel
               </Button>
-              <Button onClick={onSubmit}>Connect</Button>
+              <Button data-control-id="device.endpointConnect" onClick={onSubmit}>
+                Connect
+              </Button>
             </>
           ) : null}
         </div>

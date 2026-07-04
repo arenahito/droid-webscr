@@ -14,6 +14,7 @@ export enum MessageType {
   ControlText = 0x0303,
   ControlSystem = 0x0304,
   ControlClipboard = 0x0305,
+  ControlScroll = 0x0306,
   LogRecord = 0x0401,
 }
 
@@ -39,7 +40,8 @@ export function isControlMessage(type: MessageType): boolean {
     type === MessageType.ControlKey ||
     type === MessageType.ControlText ||
     type === MessageType.ControlSystem ||
-    type === MessageType.ControlClipboard
+    type === MessageType.ControlClipboard ||
+    type === MessageType.ControlScroll
   );
 }
 

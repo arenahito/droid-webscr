@@ -6,6 +6,7 @@ import dev.droidwebscr.server.input.InputInjector
 import dev.droidwebscr.server.input.InjectionResult
 import dev.droidwebscr.server.input.KeyControlMessage
 import dev.droidwebscr.server.input.PointerControlMessage
+import dev.droidwebscr.server.input.ScrollControlMessage
 import dev.droidwebscr.server.input.SystemAction
 import dev.droidwebscr.server.protocol.Frame
 import dev.droidwebscr.server.protocol.FrameHeader
@@ -27,6 +28,7 @@ class ControlFrameDispatcherTest {
         )
 
         assertEquals("control:pointer:Accepted", dispatcher.dispatch(pointerFrame()))
+        assertEquals("control:scroll:Accepted", dispatcher.dispatch(scrollFrame()))
         assertEquals("control:key:Accepted", dispatcher.dispatch(keyFrame()))
         assertEquals("control:text:Accepted", dispatcher.dispatch(textFrame("hello")))
         assertEquals("control:home:Accepted", dispatcher.dispatch(systemFrame(1)))
@@ -34,6 +36,7 @@ class ControlFrameDispatcherTest {
         assertEquals(
             listOf(
                 "pointer:Down:24:48:1.0:1:0",
+                "scroll:120:240:1.5:-2.25:0",
                 "key:Down:66:1:2",
                 "text:hello",
                 "system:Home",
@@ -70,8 +73,15 @@ class ControlFrameDispatcherTest {
         )
 
         assertEquals("control:pointer:Accepted", dispatcher.dispatch(pointerFrame(x = 430, y = 1600)))
+        assertEquals("control:scroll:Accepted", dispatcher.dispatch(scrollFrame(x = 430, y = 1600)))
 
-        assertEquals("pointer:Down:640:2380:1.0:1:0", input.events.single())
+        assertEquals(
+            listOf(
+                "pointer:Down:640:2380:1.0:1:0",
+                "scroll:640:2380:1.5:-2.25:0",
+            ),
+            input.events,
+        )
     }
 
     private class RecordingInputInjector : InputInjector {
@@ -87,6 +97,11 @@ class ControlFrameDispatcherTest {
             return InjectionResult.Accepted
         }
 
+        override fun injectScroll(event: ScrollControlMessage): InjectionResult {
+            events.add("scroll:${event.x}:${event.y}:${event.horizontal}:${event.vertical}:${event.displayId}")
+            return InjectionResult.Accepted
+        }
+
         override fun injectText(text: String): InjectionResult {
             events.add("text:$text")
             return InjectionResult.Accepted
@@ -97,6 +112,18 @@ class ControlFrameDispatcherTest {
             return InjectionResult.Accepted
         }
     }
+}
+
+private fun scrollFrame(x: Int = 120, y: Int = 240): Frame {
+    val payload = ByteBuffer.allocate(20)
+        .order(ByteOrder.BIG_ENDIAN)
+        .putInt(x)
+        .putInt(y)
+        .putFloat(1.5f)
+        .putFloat(-2.25f)
+        .putInt(0)
+        .array()
+    return controlFrame(MessageType.CONTROL_SCROLL, payload)
 }
 
 private fun pointerFrame(x: Int = 24, y: Int = 48): Frame {

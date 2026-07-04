@@ -25,6 +25,8 @@ internal class HybridInputEventAdapter(
 
     override fun injectKey(event: KeyControlMessage): Boolean = reflected.injectKey(event)
 
+    override fun injectScroll(event: ScrollControlMessage): Boolean = reflected.injectScroll(event)
+
     override fun injectPointer(event: PointerControlMessage): Boolean {
         val primaryDown = physicalPrimaryDown
         if (primaryDown != null) {

@@ -25,6 +25,24 @@ class InputValidationTest {
     }
 
     @Test
+    fun `validates scroll bounds and finite axis values`() {
+        val display = InputDisplayBounds(width = 1080, height = 2400)
+        val scroll = ScrollControlMessage(
+            x = 1079,
+            y = 2399,
+            horizontal = 1.5f,
+            vertical = -2.25f,
+            displayId = 0,
+        ).validated(display)
+
+        assertEquals(1.5f, scroll.horizontal)
+        assertFailsWith<IllegalArgumentException> { scroll.copy(x = 1080).validated(display) }
+        assertFailsWith<IllegalArgumentException> { scroll.copy(y = -1).validated(display) }
+        assertFailsWith<IllegalArgumentException> { scroll.copy(horizontal = Float.NaN).validated(display) }
+        assertFailsWith<IllegalArgumentException> { scroll.copy(vertical = Float.POSITIVE_INFINITY).validated(display) }
+    }
+
+    @Test
     fun `validates keycode range text length and unsupported system actions`() {
         val key = KeyControlMessage(KeyAction.Down, keyCode = 4, metaState = 0, repeat = 0).validated()
         assertEquals(4, key.keyCode)
@@ -50,7 +68,8 @@ class InputValidationTest {
         val injector = ShellInputInjector(adapter, InputDisplayBounds(1080, 2400))
 
         assertEquals(InjectionResult.Accepted, injector.injectSystemAction(SystemAction.Home))
-        assertEquals(listOf("key:Down:3", "key:Up:3"), adapter.events)
+        assertEquals(InjectionResult.Accepted, injector.injectScroll(ScrollControlMessage(20, 30, 0f, -1f)))
+        assertEquals(listOf("key:Down:3", "key:Up:3", "scroll:20:30:0.0:-1.0"), adapter.events)
     }
 
     @Test
@@ -340,6 +359,19 @@ class InputValidationTest {
 
         assertEquals(emptyList(), physical.events)
         assertEquals(listOf("pointer:Down:100:200"), reflected.events)
+    }
+
+    @Test
+    fun `hybrid adapter sends scroll through reflected input`() {
+        val physical = RecordingPhysicalTouchInputAdapter()
+        val reflected = RecordingInputEventAdapter()
+        val adapter = HybridInputEventAdapter(reflected, physical)
+        val scroll = ScrollControlMessage(x = 100, y = 200, horizontal = 1f, vertical = -1f)
+
+        assertEquals(true, adapter.injectScroll(scroll))
+
+        assertEquals(emptyList(), physical.events)
+        assertEquals(listOf("scroll:100:200:1.0:-1.0"), reflected.events)
     }
 
     @Test
@@ -679,6 +711,11 @@ class InputValidationTest {
 
         override fun injectText(text: String): Boolean {
             events.add("text:$text")
+            return acceptedEvents.getOrNull(events.lastIndex) ?: true
+        }
+
+        override fun injectScroll(event: ScrollControlMessage): Boolean {
+            events.add("scroll:${event.x}:${event.y}:${event.horizontal}:${event.vertical}")
             return acceptedEvents.getOrNull(events.lastIndex) ?: true
         }
     }

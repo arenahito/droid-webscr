@@ -178,6 +178,7 @@ describe("message and stream classification", () => {
     expect(isControlMessage(MessageType.ControlText)).toBe(true);
     expect(isControlMessage(MessageType.ControlSystem)).toBe(true);
     expect(isControlMessage(MessageType.ControlClipboard)).toBe(true);
+    expect(isControlMessage(MessageType.ControlScroll)).toBe(true);
     expect(isControlMessage(MessageType.VideoFrame)).toBe(false);
   });
 
@@ -193,6 +194,7 @@ describe("message and stream classification", () => {
     expect(MessageType.ControlText).toBe(0x0303);
     expect(MessageType.ControlSystem).toBe(0x0304);
     expect(MessageType.ControlClipboard).toBe(0x0305);
+    expect(MessageType.ControlScroll).toBe(0x0306);
     expect(MessageType.LogRecord).toBe(0x0401);
   });
 

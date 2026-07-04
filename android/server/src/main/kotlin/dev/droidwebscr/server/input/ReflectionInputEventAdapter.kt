@@ -35,6 +35,54 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         return accepted
     }
 
+    override fun injectScroll(event: ScrollControlMessage): Boolean {
+        val validated = event.validated(InputDisplayBounds(Int.MAX_VALUE, Int.MAX_VALUE))
+        if (injectScrollWithShell(validated)) {
+            return true
+        }
+        val now = SystemClock.uptimeMillis()
+        val gesture = PointerGestureUpdate(
+            action = MOTION_ACTION_SCROLL,
+            actionButton = 0,
+            buttonState = 0,
+            displayId = validated.displayId,
+            downTime = now,
+            pointers = listOf(
+                ActivePointer(
+                    id = 0,
+                    index = 0,
+                    x = validated.x,
+                    y = validated.y,
+                    pressure = 0f,
+                    toolType = TOOL_TYPE_MOUSE,
+                ),
+            ),
+            source = SOURCE_MOUSE,
+        )
+        val hoverEvent = setEventSource(
+            createMotionEvent(
+                gesture,
+                now,
+                MOTION_ACTION_HOVER_MOVE,
+                0,
+            ),
+            SOURCE_MOUSE,
+        )
+        val scrollEvent = setEventSource(
+            createMotionEvent(
+                gesture,
+                now,
+                MOTION_ACTION_SCROLL,
+                0,
+                horizontalScroll = validated.horizontal,
+                verticalScroll = validated.vertical,
+            ),
+            SOURCE_MOUSE,
+        )
+        return inject(hoverEvent, INJECT_INPUT_EVENT_MODE_ASYNC) &&
+            inject(scrollEvent, INJECT_INPUT_EVENT_MODE_ASYNC)
+    }
+
     override fun injectText(text: String): Boolean {
         TextControlMessage(text).validated()
         val keyCharacterMapClass = Class.forName("android.view.KeyCharacterMap")
@@ -89,10 +137,19 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         eventTime: Long,
         action: Int = gesture.action,
         buttonState: Int = gesture.buttonState,
+        horizontalScroll: Float = 0f,
+        verticalScroll: Float = 0f,
     ): Any {
         val motionEventClass = Class.forName("android.view.MotionEvent")
         val pointerPropertiesClass = Class.forName("android.view.MotionEvent\$PointerProperties")
         val pointerCoordsClass = Class.forName("android.view.MotionEvent\$PointerCoords")
+        val setAxisValue = pointerCoordsClass.getMethod(
+            "setAxisValue",
+            Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType,
+        )
+        val axisHScroll = motionEventClass.getField("AXIS_HSCROLL").getInt(null)
+        val axisVScroll = motionEventClass.getField("AXIS_VSCROLL").getInt(null)
         val properties = java.lang.reflect.Array.newInstance(pointerPropertiesClass, gesture.pointers.size)
         val coords = java.lang.reflect.Array.newInstance(pointerCoordsClass, gesture.pointers.size)
         for ((arrayIndex, pointer) in gesture.pointers.withIndex()) {
@@ -106,6 +163,8 @@ class ReflectionInputEventAdapter : InputEventAdapter {
             pointerCoordsClass.getField("y").setFloat(coord, pointer.y.toFloat())
             pointerCoordsClass.getField("pressure").setFloat(coord, pointer.pressure)
             pointerCoordsClass.getField("size").setFloat(coord, 1.0f)
+            setAxisValue.invoke(coord, axisHScroll, horizontalScroll)
+            setAxisValue.invoke(coord, axisVScroll, verticalScroll)
             java.lang.reflect.Array.set(coords, arrayIndex, coord)
         }
         val motionEvent = requireNotNull(motionEventClass.getMethod(
@@ -200,8 +259,33 @@ class ReflectionInputEventAdapter : InputEventAdapter {
     private fun injectPointerWithShell(event: PointerControlMessage): Boolean =
         shellPointerFallback.inject(event) { args -> injectShell(*args.toTypedArray()) }
 
+    private fun injectScrollWithShell(event: ScrollControlMessage): Boolean {
+        val args = mutableListOf(
+            "input",
+            "mouse",
+            "-d",
+            event.displayId.toString(),
+            "scroll",
+            event.x.toString(),
+            event.y.toString(),
+        )
+        if (event.horizontal != 0f) {
+            args.add("--axis")
+            args.add("HSCROLL,${event.horizontal}")
+        }
+        if (event.vertical != 0f) {
+            args.add("--axis")
+            args.add("VSCROLL,${event.vertical}")
+        }
+        return injectCommand("/system/bin/cmd", *args.toTypedArray())
+    }
+
     private fun injectShell(vararg args: String): Boolean = runCatching {
-        val process = ProcessBuilder("/system/bin/input", *args).redirectErrorStream(true).start()
+        injectCommand("/system/bin/input", *args)
+    }.getOrDefault(false)
+
+    private fun injectCommand(command: String, vararg args: String): Boolean = runCatching {
+        val process = ProcessBuilder(command, *args).redirectErrorStream(true).start()
         if (!process.waitFor(2, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             return@runCatching false
@@ -218,6 +302,8 @@ class ReflectionInputEventAdapter : InputEventAdapter {
         const val MOTION_ACTION_CANCEL = 3
         const val MOTION_ACTION_POINTER_DOWN = 5
         const val MOTION_ACTION_POINTER_UP = 6
+        const val MOTION_ACTION_HOVER_MOVE = 7
+        const val MOTION_ACTION_SCROLL = 8
         const val MOTION_ACTION_BUTTON_PRESS = 11
         const val MOTION_ACTION_BUTTON_RELEASE = 12
         const val INJECT_INPUT_EVENT_MODE_ASYNC = 0

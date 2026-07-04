@@ -5,6 +5,7 @@ import java.io.Closeable
 interface InputInjector {
     fun injectPointer(event: PointerControlMessage): InjectionResult
     fun injectKey(event: KeyControlMessage): InjectionResult
+    fun injectScroll(event: ScrollControlMessage): InjectionResult
     fun injectText(text: String): InjectionResult
     fun injectSystemAction(action: SystemAction): InjectionResult
 }
@@ -43,6 +44,23 @@ data class PointerControlMessage(
         require(y in 0 until bounds.height) { "Pointer y is outside the display bounds." }
         require(pressure in 0f..1f) { "Pointer pressure must be between 0 and 1." }
         require(buttons >= 0) { "Pointer buttons must be non-negative." }
+        require(displayId >= 0) { "Display id must be non-negative." }
+        return this
+    }
+}
+
+data class ScrollControlMessage(
+    val x: Int,
+    val y: Int,
+    val horizontal: Float,
+    val vertical: Float,
+    val displayId: Int = 0,
+) {
+    fun validated(bounds: InputDisplayBounds): ScrollControlMessage {
+        require(x in 0 until bounds.width) { "Scroll x is outside the display bounds." }
+        require(y in 0 until bounds.height) { "Scroll y is outside the display bounds." }
+        require(horizontal.isFinite()) { "Horizontal scroll axis must be finite." }
+        require(vertical.isFinite()) { "Vertical scroll axis must be finite." }
         require(displayId >= 0) { "Display id must be non-negative." }
         return this
     }
@@ -107,6 +125,7 @@ sealed interface InjectionResult {
 interface InputEventAdapter : Closeable {
     fun injectKey(event: KeyControlMessage): Boolean
     fun injectPointer(event: PointerControlMessage): Boolean
+    fun injectScroll(event: ScrollControlMessage): Boolean
     fun injectText(text: String): Boolean
     override fun close() = Unit
 }
@@ -124,6 +143,10 @@ class ShellInputInjector(
     override fun injectKey(event: KeyControlMessage): InjectionResult =
         runCatching { adapter.injectKey(event.validated()) }
             .toInjectionResult("Key event")
+
+    override fun injectScroll(event: ScrollControlMessage): InjectionResult =
+        runCatching { adapter.injectScroll(event.validated(displayBounds)) }
+            .toInjectionResult("Scroll event")
 
     override fun injectText(text: String): InjectionResult {
         val message = TextControlMessage(text).validated()

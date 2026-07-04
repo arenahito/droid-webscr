@@ -1369,6 +1369,77 @@ describe("DroidWebscrApp", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(23);
   });
 
+  it("sends wheel input as Android scroll control frames", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() =>
+          new FakeVideoPipeline({
+            configured: true,
+            decodedFrames: 1,
+            droppedFrames: 0,
+            lastError: undefined,
+            pressure: false,
+            status: "ready",
+            videoSize: { height: 1280, width: 720 },
+          })
+        }
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+
+    const canvas = screen.getByLabelText("Android video canvas") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({
+        bottom: 100,
+        height: 100,
+        left: 10,
+        right: 110,
+        toJSON: () => ({}),
+        top: 20,
+        width: 100,
+        x: 10,
+        y: 20,
+      }) as DOMRect;
+
+    fireEvent.wheel(canvas, { clientX: 60, clientY: 70, deltaY: 120 });
+    fireEvent.wheel(canvas, { clientX: 60, clientY: 70, deltaY: 120, shiftKey: true });
+
+    await waitFor(() => {
+      expect(socket.sent.slice(1).map(decodedType)).toEqual([
+        MessageType.ControlScroll,
+        MessageType.ControlScroll,
+      ]);
+    });
+    expect(socket.sent.slice(1).map(decodeScrollPayload)).toEqual([
+      { displayId: 0, horizontal: 0, vertical: -1.2, x: 360, y: 640 },
+      { displayId: 0, horizontal: -1.2, vertical: 0, x: 360, y: 640 },
+    ]);
+  });
+
   it("interpolates long pointer drags into continuous move frames", async () => {
     const user = userEvent.setup();
     const socket = new FakeBinaryWebSocket();
@@ -3783,6 +3854,31 @@ function decodePointerButtons(frame: Uint8Array): number {
   return view.getUint16(14, false);
 }
 
+function decodeScrollPayload(frame: Uint8Array): {
+  readonly displayId: number;
+  readonly horizontal: number;
+  readonly vertical: number;
+  readonly x: number;
+  readonly y: number;
+} {
+  const decoded = decodeFrame(frame);
+  if (!decoded.ok || decoded.value.header.type !== MessageType.ControlScroll) {
+    throw new Error("Expected a scroll control frame.");
+  }
+  const view = new DataView(
+    decoded.value.payload.buffer,
+    decoded.value.payload.byteOffset,
+    decoded.value.payload.byteLength,
+  );
+  return {
+    displayId: view.getUint32(16, false),
+    horizontal: roundAxisForTest(view.getFloat32(8, false)),
+    vertical: roundAxisForTest(view.getFloat32(12, false)),
+    x: view.getUint32(0, false),
+    y: view.getUint32(4, false),
+  };
+}
+
 function decodeKeyPayload(frame: Uint8Array): {
   readonly action: number;
   readonly keyCode: number;
@@ -3804,6 +3900,10 @@ function decodeKeyPayload(frame: Uint8Array): {
     metaState: view.getUint32(4, false),
     repeat: view.getUint32(8, false),
   };
+}
+
+function roundAxisForTest(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function setLogScrollMetrics(

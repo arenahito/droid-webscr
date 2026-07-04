@@ -16,6 +16,7 @@ enum class MessageType(val value: UShort) {
     CONTROL_TEXT(0x0303u),
     CONTROL_SYSTEM(0x0304u),
     CONTROL_CLIPBOARD(0x0305u),
+    CONTROL_SCROLL(0x0306u),
     LOG_RECORD(0x0401u),
 }
 

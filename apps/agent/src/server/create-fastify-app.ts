@@ -11,6 +11,7 @@ import { extname, join, normalize, relative, sep } from "node:path";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { DeviceServer, AdbDeviceServer } from "../device-server/start.js";
 import { isAllowedHost, isAllowedOrigin } from "../security/origin.js";
+import { sendBrowserFrame } from "../session/bridge-session.js";
 import { StartedDeviceSession } from "../session/device-session.js";
 import { SessionManager } from "../session/session-manager.js";
 import { registerRoutes } from "./routes.js";
@@ -244,7 +245,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
         /* v8 ignore next -- injectWS delivers Buffer frames for this binary route. */
         const frame = data instanceof Uint8Array ? data : new Uint8Array(data);
         if (deviceSession) {
-          void deviceSession.write(frame).catch(close);
+          void sendBrowserFrame(frame, deviceSession).catch(close);
           return;
         }
         pendingBrowserFrames.push(frame);
@@ -272,7 +273,7 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
           }
           deviceSession = startedSession;
           await Promise.all(
-            pendingBrowserFrames.splice(0).map((frame) => startedSession.write(frame)),
+            pendingBrowserFrames.splice(0).map((frame) => sendBrowserFrame(frame, startedSession)),
           );
           for await (const frame of readFrames(startedSession.frames)) {
             socket.send(encodeFrame(frame));

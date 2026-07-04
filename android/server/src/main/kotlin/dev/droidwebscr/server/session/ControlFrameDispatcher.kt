@@ -7,6 +7,7 @@ import dev.droidwebscr.server.input.KeyAction
 import dev.droidwebscr.server.input.KeyControlMessage
 import dev.droidwebscr.server.input.PointerAction
 import dev.droidwebscr.server.input.PointerControlMessage
+import dev.droidwebscr.server.input.ScrollControlMessage
 import dev.droidwebscr.server.input.SystemAction
 import dev.droidwebscr.server.protocol.Frame
 import dev.droidwebscr.server.protocol.MessageType
@@ -28,6 +29,10 @@ internal class ControlFrameDispatcher(
         MessageType.CONTROL_KEY.value -> {
             requireControlStream(frame)
             "control:key:${inputInjector.injectKey(parseKey(frame))}"
+        }
+        MessageType.CONTROL_SCROLL.value -> {
+            requireControlStream(frame)
+            "control:scroll:${inputInjector.injectScroll(parseScroll(frame).scaledToInputBounds())}"
         }
         MessageType.CONTROL_TEXT.value -> {
             requireControlStream(frame)
@@ -76,6 +81,28 @@ internal class ControlFrameDispatcher(
     }
 
     private fun PointerControlMessage.scaledToInputBounds(): PointerControlMessage {
+        if (bounds.width == inputBounds.width && bounds.height == inputBounds.height) {
+            return this
+        }
+        return copy(
+            x = scaleCoordinate(x, bounds.width, inputBounds.width),
+            y = scaleCoordinate(y, bounds.height, inputBounds.height),
+        ).validated(inputBounds)
+    }
+
+    private fun parseScroll(frame: Frame): ScrollControlMessage {
+        require(frame.payload.size == 20) { "CONTROL_SCROLL payload must be 20 bytes." }
+        val buffer = frame.payloadBuffer()
+        return ScrollControlMessage(
+            x = buffer.getInt(0),
+            y = buffer.getInt(4),
+            horizontal = buffer.getFloat(8),
+            vertical = buffer.getFloat(12),
+            displayId = buffer.getInt(16),
+        ).validated(bounds)
+    }
+
+    private fun ScrollControlMessage.scaledToInputBounds(): ScrollControlMessage {
         if (bounds.width == inputBounds.width && bounds.height == inputBounds.height) {
             return this
         }

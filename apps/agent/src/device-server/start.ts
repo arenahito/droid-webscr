@@ -64,6 +64,10 @@ export class AdbDeviceServer implements DeviceServer {
       return {
         frames: socket.chunks,
         serial,
+        shell: async (command) => {
+          const shellProcess = await session?.shell(command);
+          return shellProcess ? await shellProcess.exit : 1;
+        },
         stop: async () => {
           await socket?.close().catch(ignoreAsyncError);
           await delay(300);

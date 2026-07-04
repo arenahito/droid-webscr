@@ -30,6 +30,14 @@ export interface PointerControlPayloadInput extends ControlFrameOptions {
   readonly y: number;
 }
 
+export interface ScrollControlPayloadInput extends ControlFrameOptions {
+  readonly displayId?: number | undefined;
+  readonly horizontal: number;
+  readonly vertical: number;
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface KeyControlPayloadInput extends ControlFrameOptions {
   readonly action: KeyControlAction;
   readonly keyCode: number;
@@ -57,6 +65,17 @@ export function createPointerControlFrame(input: PointerControlPayloadInput): Ui
   view.setUint16(14, input.buttons, false);
   view.setUint32(16, input.displayId ?? 0, false);
   return createControlFrame(MessageType.ControlPointer, payload, input);
+}
+
+export function createScrollControlFrame(input: ScrollControlPayloadInput): Uint8Array {
+  const payload = new Uint8Array(20);
+  const view = new DataView(payload.buffer);
+  view.setUint32(0, input.x, false);
+  view.setUint32(4, input.y, false);
+  view.setFloat32(8, input.horizontal, false);
+  view.setFloat32(12, input.vertical, false);
+  view.setUint32(16, input.displayId ?? 0, false);
+  return createControlFrame(MessageType.ControlScroll, payload, input);
 }
 
 export function createKeyControlFrame(input: KeyControlPayloadInput): Uint8Array {

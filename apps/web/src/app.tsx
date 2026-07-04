@@ -26,6 +26,7 @@ import {
 import {
   createFrameHeader,
   createKeyControlFrame,
+  createScrollControlFrame,
   decodeFrame,
   createSystemControlFrame,
   createVideoReconfigureFrame,
@@ -134,6 +135,7 @@ const phoneControlRailHeightPx = 38;
 const phoneControlRailWidthPx = 46;
 const pointerDragFrameIntervalMs = 8;
 const pointerDragInterpolationStepPx = 12;
+const wheelPixelDeltaPerAxisUnit = 100;
 const syntheticPinchStartThresholdPx = 0;
 const androidMenuKeyCode = 82;
 const maxAndroidKeyCode = 65_535;
@@ -1118,6 +1120,35 @@ export function DroidWebscrApp({
     [clearPointerGestureState, rotation, videoSnapshot?.videoSize],
   );
 
+  const sendWheelScroll = React.useCallback(
+    (event: React.WheelEvent<HTMLCanvasElement>) => {
+      if (!controlReadyRef.current) {
+        return;
+      }
+      /* v8 ignore next -- wheel input is user-reachable only after video size is known. */
+      const size = videoSnapshot?.videoSize;
+      if (!size) {
+        return;
+      }
+      const [horizontal, vertical] = mapWheelDeltasToAndroidScroll(event);
+      if (horizontal === 0 && vertical === 0) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      event.preventDefault();
+      void sendControlFrame(
+        createScrollControlFrame({
+          horizontal,
+          sequence: nextSequence(sequenceRef),
+          vertical,
+          x: mapClientCoordinateToDisplay(event.clientX, rect.left, rect.width, size.width),
+          y: mapClientCoordinateToDisplay(event.clientY, rect.top, rect.height, size.height),
+        }),
+      );
+    },
+    [sendControlFrame, videoSnapshot?.videoSize],
+  );
+
   React.useEffect(
     () => () => {
       const socket = sessionSocketRef.current;
@@ -1201,6 +1232,7 @@ export function DroidWebscrApp({
                 }
               }}
               onPointerUp={(event) => sendPointer(event, "up")}
+              onWheel={sendWheelScroll}
               pinchOverlay={pinchOverlay}
               rotation={rotation}
               textInputRef={textInputRef}
@@ -1573,6 +1605,7 @@ function AndroidViewport({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onWheel,
   pinchOverlay,
   rotation,
   textInputRef,
@@ -1589,6 +1622,7 @@ function AndroidViewport({
   readonly onPointerDown: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerMove: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerUp: (event: React.PointerEvent<HTMLCanvasElement>) => void;
+  readonly onWheel: (event: React.WheelEvent<HTMLCanvasElement>) => void;
   readonly pinchOverlay: PinchOverlayState | undefined;
   readonly rotation: number;
   readonly textInputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -1632,6 +1666,7 @@ function AndroidViewport({
             }}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
+            onWheel={onWheel}
             ref={canvasRef}
             tabIndex={0}
           />
@@ -1790,6 +1825,53 @@ function interpolatePointerDrag(
       y: previous.y + (current.y - previous.y) * progress,
     };
   });
+}
+
+function mapWheelDeltasToAndroidScroll(
+  event: React.WheelEvent<HTMLElement>,
+): readonly [horizontal: number, vertical: number] {
+  const horizontalDelta = event.shiftKey ? event.deltaY || event.deltaX : event.deltaX;
+  const verticalDelta = event.shiftKey ? 0 : event.deltaY;
+  return [
+    toAndroidScrollAxis(horizontalDelta, event.deltaMode),
+    toAndroidScrollAxis(verticalDelta, event.deltaMode),
+  ];
+}
+
+function toAndroidScrollAxis(delta: number, deltaMode: number): number {
+  const normalized = normalizeWheelDelta(delta, deltaMode);
+  return normalized === 0 ? 0 : -normalized;
+}
+
+function normalizeWheelDelta(delta: number, deltaMode: number): number {
+  if (delta === 0) {
+    return 0;
+  }
+  if (deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return delta;
+  }
+  if (deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return delta * 8;
+  }
+  return delta / wheelPixelDeltaPerAxisUnit;
+}
+
+function mapClientCoordinateToDisplay(
+  clientCoordinate: number,
+  viewportStart: number,
+  viewportSize: number,
+  displaySize: number,
+): number {
+  const relative = clamp(clientCoordinate - viewportStart, 0, viewportSize);
+  return clampToInt(Math.round((relative / viewportSize) * displaySize), 0, displaySize - 1);
+}
+
+function clampToInt(value: number, min: number, max: number): number {
+  return Math.round(clamp(value, min, max));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function enqueuePointerFrame(

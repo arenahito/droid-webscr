@@ -4,6 +4,7 @@ import {
   createClipboardControlFrame,
   createKeyControlFrame,
   createPointerControlFrame,
+  createScrollControlFrame,
   createSystemControlFrame,
   createTextControlFrame,
 } from "./control.js";
@@ -66,6 +67,30 @@ describe("control protocol payload helpers", () => {
     expect(clipboardSet.ok && clipboardSet.value.header.type).toBe(MessageType.ControlClipboard);
     expect(clipboardSet.ok && [...clipboardSet.value.payload]).toEqual([0, 72, 105]);
     expect(clipboardGet.ok && [...clipboardGet.value.payload]).toEqual([1]);
+  });
+
+  it("encodes scroll payloads with pointer position and axis values", () => {
+    const decoded = decodeFrame(
+      createScrollControlFrame({
+        displayId: 3,
+        horizontal: 1.5,
+        sequence: 10n,
+        vertical: -2.25,
+        x: 320,
+        y: 640,
+      }),
+    );
+
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) {
+      return;
+    }
+    expect(decoded.value.header.type).toBe(MessageType.ControlScroll);
+    expect(decoded.value.header.streamId).toBe(StreamId.Control);
+    expect(decoded.value.header.sequence).toBe(10n);
+    expect([...decoded.value.payload]).toEqual([
+      0, 0, 1, 64, 0, 0, 2, 128, 63, 192, 0, 0, 192, 16, 0, 0, 0, 0, 0, 3,
+    ]);
   });
 
   it("encodes cancel and back variants with timestamp metadata", () => {

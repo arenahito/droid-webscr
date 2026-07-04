@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/arenahito/droid-webscr/compare/v0.4.0...v0.5.0) (2026-07-04)
+
+
+### Features
+
+* add Android wheel scroll input ([78a8810](https://github.com/arenahito/droid-webscr/commit/78a8810957f487207e0bde51b8cdc7a7a68554df))
+* **web:** add synthetic pinch guide overlay ([484dbd5](https://github.com/arenahito/droid-webscr/commit/484dbd5712874f539e30e8a703c712f00970ca37))
+
 ## [0.4.0](https://github.com/arenahito/droid-webscr/compare/v0.3.0...v0.4.0) (2026-06-21)
 
 

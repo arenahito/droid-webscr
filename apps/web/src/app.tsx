@@ -89,14 +89,28 @@ interface PinchGesture {
   readonly browserPointerId: number;
   readonly centerX: number;
   readonly centerY: number;
+  readonly lastPrimary: ClientPoint;
+  readonly lastSecondary: ClientPoint;
+  readonly moveStarted: boolean;
   readonly primarySlot: number;
   readonly queueKey: number | undefined;
   readonly secondarySlot: number;
+  readonly startX: number;
+  readonly startY: number;
+  readonly touchStarted: boolean;
 }
 
 interface ClientPoint {
   readonly x: number;
   readonly y: number;
+}
+
+interface PinchOverlayState {
+  readonly center: ClientPoint;
+  readonly guideRotation: number;
+  readonly guideWidth: number;
+  readonly primary: ClientPoint;
+  readonly secondary: ClientPoint;
 }
 
 const defaultSessionState: SessionState = {
@@ -120,7 +134,7 @@ const phoneControlRailHeightPx = 38;
 const phoneControlRailWidthPx = 46;
 const pointerDragFrameIntervalMs = 8;
 const pointerDragInterpolationStepPx = 12;
-const syntheticPinchRadiusPx = 32;
+const syntheticPinchStartThresholdPx = 0;
 const androidMenuKeyCode = 82;
 const maxAndroidKeyCode = 65_535;
 
@@ -194,6 +208,7 @@ export function DroidWebscrApp({
   const deviceLogFlushTimerRef = React.useRef<number | undefined>(undefined);
   const deviceLogSerialRef = React.useRef<string | undefined>(undefined);
   const pinchGestureRef = React.useRef<PinchGesture | undefined>(undefined);
+  const [pinchOverlay, setPinchOverlay] = React.useState<PinchOverlayState | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
   const menuShortcutKeyDownRef = React.useRef(false);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
@@ -404,6 +419,7 @@ export function DroidWebscrApp({
       pointerSlotFrameQueueRef.current.clear();
       pointerGestureGenerationRef.current.clear();
       pinchGestureRef.current = undefined;
+      setPinchOverlay(undefined);
       sessionSocketRef.current = undefined;
       setControlReady(false);
       videoPipelineRef.current = undefined;
@@ -751,8 +767,25 @@ export function DroidWebscrApp({
     [sendTextValue],
   );
 
+  const clearPointerGestureState = React.useCallback(() => {
+    for (const pointerId of activePointerSlotsRef.current.keys()) {
+      pointerGestureGenerationRef.current.set(
+        pointerId,
+        (pointerGestureGenerationRef.current.get(pointerId) ?? 0) + 1,
+      );
+    }
+    activePointerSlotsRef.current.clear();
+    pointerPositionsRef.current.clear();
+    pinchGestureRef.current = undefined;
+    setPinchOverlay(undefined);
+  }, []);
+
   const sendPointer = React.useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>, action: PointerAction) => {
+      if (!controlReadyRef.current) {
+        clearPointerGestureState();
+        return;
+      }
       /* v8 ignore next -- pointer input is user-reachable only after video size is known. */
       const size = videoSnapshot?.videoSize ?? { height: 1280, width: 720 };
       const rect = event.currentTarget.getBoundingClientRect();
@@ -765,17 +798,6 @@ export function DroidWebscrApp({
         );
       }
       const pointerGestureGeneration = pointerGestureGenerationRef.current.get(event.pointerId);
-      const clearPointerGestureState = () => {
-        for (const pointerId of activePointerSlotsRef.current.keys()) {
-          pointerGestureGenerationRef.current.set(
-            pointerId,
-            (pointerGestureGenerationRef.current.get(pointerId) ?? 0) + 1,
-          );
-        }
-        activePointerSlotsRef.current.clear();
-        pointerPositionsRef.current.clear();
-        pinchGestureRef.current = undefined;
-      };
       const sendPointerFrame = (
         frameAction: PointerAction,
         pointerSlot: number,
@@ -853,46 +875,73 @@ export function DroidWebscrApp({
       const pinchGesture = pinchGestureRef.current;
       if (pinchGesture?.browserPointerId === event.pointerId) {
         event.preventDefault();
-        const [primary, secondary] = createSyntheticPinchPoints(pinchGesture, event);
-        if (action === "up" || action === "cancel") {
-          if (action === "cancel") {
+        const pinchPoints = createSyntheticPinchPoints(pinchGesture, event);
+        setPinchOverlay(createPinchOverlayState(pinchGesture, event, rect));
+        const pinchPointsInBounds =
+          isClientPointInsideRect(pinchPoints[0], rect) &&
+          isClientPointInsideRect(pinchPoints[1], rect);
+        const cancelSyntheticPinchInput = () => {
+          if (pinchGesture.touchStarted) {
             sendPointerFrame(
               "cancel",
               pinchGesture.primarySlot,
-              primary.x,
-              primary.y,
+              pinchGesture.lastPrimary.x,
+              pinchGesture.lastPrimary.y,
               0,
               0,
               pinchGesture.queueKey,
             );
+          }
+        };
+        if (action === "up" || action === "cancel") {
+          if (action === "cancel") {
+            cancelSyntheticPinchInput();
             clearPointerGestureState();
             event.currentTarget.releasePointerCapture?.(event.pointerId);
             return;
           }
-          sendPointerFrame(
-            action,
-            pinchGesture.secondarySlot,
-            secondary.x,
-            secondary.y,
-            0,
-            0,
-            pinchGesture.queueKey,
-          );
-          sendPointerFrame(
-            action,
-            pinchGesture.primarySlot,
-            primary.x,
-            primary.y,
-            0,
-            0,
-            pinchGesture.queueKey,
-          );
+          if (pinchGesture.touchStarted) {
+            sendPointerFrame(
+              action,
+              pinchGesture.secondarySlot,
+              pinchGesture.lastSecondary.x,
+              pinchGesture.lastSecondary.y,
+              0,
+              0,
+              pinchGesture.queueKey,
+            );
+            sendPointerFrame(
+              action,
+              pinchGesture.primarySlot,
+              pinchGesture.lastPrimary.x,
+              pinchGesture.lastPrimary.y,
+              0,
+              0,
+              pinchGesture.queueKey,
+            );
+          }
           activePointerSlotsRef.current.delete(event.pointerId);
           activePointerSlotsRef.current.delete(syntheticPinchPointerId(event.pointerId));
           pinchGestureRef.current = undefined;
+          setPinchOverlay(undefined);
           event.currentTarget.releasePointerCapture?.(event.pointerId);
           return;
         }
+        if (!pinchPointsInBounds) {
+          return;
+        }
+        const [primary, secondary] = pinchPoints;
+        const moveStarted =
+          pinchGesture.moveStarted || hasSyntheticPinchMoveStarted(pinchGesture, event);
+        if (!moveStarted) {
+          return;
+        }
+        pinchGestureRef.current = {
+          ...pinchGesture,
+          lastPrimary: primary,
+          lastSecondary: secondary,
+          moveStarted,
+        };
         sendPointerFrame(
           "move",
           pinchGesture.primarySlot,
@@ -938,14 +987,34 @@ export function DroidWebscrApp({
           pointerSlotFrameQueueRef.current.has(secondarySlot);
         const nextPinchGesture = {
           browserPointerId: event.pointerId,
-          centerX: event.clientX,
-          centerY: event.clientY,
+          centerX: rect.left + rect.width / 2,
+          centerY: rect.top + rect.height / 2,
+          lastPrimary: { x: event.clientX, y: event.clientY },
+          lastSecondary: { x: event.clientX, y: event.clientY },
+          moveStarted: false,
           primarySlot,
           queueKey: pendingPinchQueue ? event.pointerId : undefined,
           secondarySlot,
+          startX: event.clientX,
+          startY: event.clientY,
+          touchStarted: true,
         };
         pinchGestureRef.current = nextPinchGesture;
-        const [primary, secondary] = createSyntheticPinchPoints(nextPinchGesture, event);
+        const pinchPoints = createSyntheticPinchPoints(nextPinchGesture, event);
+        const pinchPointsInBounds =
+          isClientPointInsideRect(pinchPoints[0], rect) &&
+          isClientPointInsideRect(pinchPoints[1], rect);
+        pinchGestureRef.current = {
+          ...nextPinchGesture,
+          lastPrimary: pinchPoints[0],
+          lastSecondary: pinchPoints[1],
+          touchStarted: pinchPointsInBounds,
+        };
+        setPinchOverlay(createPinchOverlayState(nextPinchGesture, event, rect));
+        if (!pinchPointsInBounds) {
+          return;
+        }
+        const [primary, secondary] = pinchPoints;
         sendPointerFrame(
           "down",
           primarySlot,
@@ -1046,7 +1115,7 @@ export function DroidWebscrApp({
         event.currentTarget.releasePointerCapture?.(event.pointerId);
       }
     },
-    [rotation, videoSnapshot?.videoSize],
+    [clearPointerGestureState, rotation, videoSnapshot?.videoSize],
   );
 
   React.useEffect(
@@ -1060,6 +1129,7 @@ export function DroidWebscrApp({
       pointerSlotFrameQueueRef.current.clear();
       pointerGestureGenerationRef.current.clear();
       pinchGestureRef.current = undefined;
+      setPinchOverlay(undefined);
       sessionSocketRef.current = undefined;
       setControlReady(false);
       videoPipelineRef.current = undefined;
@@ -1131,6 +1201,7 @@ export function DroidWebscrApp({
                 }
               }}
               onPointerUp={(event) => sendPointer(event, "up")}
+              pinchOverlay={pinchOverlay}
               rotation={rotation}
               textInputRef={textInputRef}
               viewportSize={viewportSize}
@@ -1502,6 +1573,7 @@ function AndroidViewport({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  pinchOverlay,
   rotation,
   textInputRef,
   viewportSize,
@@ -1517,6 +1589,7 @@ function AndroidViewport({
   readonly onPointerDown: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerMove: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerUp: (event: React.PointerEvent<HTMLCanvasElement>) => void;
+  readonly pinchOverlay: PinchOverlayState | undefined;
   readonly rotation: number;
   readonly textInputRef: React.RefObject<HTMLTextAreaElement | null>;
   readonly viewportSize: { readonly height: number; readonly width: number } | undefined;
@@ -1562,6 +1635,7 @@ function AndroidViewport({
             ref={canvasRef}
             tabIndex={0}
           />
+          {pinchOverlay ? <PinchGestureOverlay overlay={pinchOverlay} /> : null}
           <textarea
             aria-label="Android text input"
             autoCapitalize="off"
@@ -1772,18 +1846,99 @@ function ignoreAsyncError(): undefined {
 function createSyntheticPinchPoints(
   gesture: PinchGesture,
   pointer: { readonly clientX: number; readonly clientY: number },
-): readonly [
-  { readonly x: number; readonly y: number },
-  { readonly x: number; readonly y: number },
-] {
+): readonly [ClientPoint, ClientPoint] {
   const deltaX = pointer.clientX - gesture.centerX;
   const deltaY = pointer.clientY - gesture.centerY;
-  const distance = Math.hypot(deltaX, deltaY);
-  const vector = distance < 1 ? { x: 0, y: -syntheticPinchRadiusPx } : { x: deltaX, y: deltaY };
   return [
-    { x: gesture.centerX + vector.x, y: gesture.centerY + vector.y },
-    { x: gesture.centerX - vector.x, y: gesture.centerY - vector.y },
+    { x: gesture.centerX + deltaX, y: gesture.centerY + deltaY },
+    { x: gesture.centerX - deltaX, y: gesture.centerY - deltaY },
   ];
+}
+
+function hasSyntheticPinchMoveStarted(
+  gesture: PinchGesture,
+  pointer: { readonly clientX: number; readonly clientY: number },
+): boolean {
+  return (
+    Math.hypot(pointer.clientX - gesture.startX, pointer.clientY - gesture.startY) >=
+    syntheticPinchStartThresholdPx
+  );
+}
+
+function isClientPointInsideRect(point: ClientPoint, rect: DOMRect): boolean {
+  return (
+    point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
+  );
+}
+
+function createPinchOverlayState(
+  gesture: PinchGesture,
+  pointer: { readonly clientX: number; readonly clientY: number },
+  rect: DOMRect,
+): PinchOverlayState {
+  const center = toViewportPoint({ x: gesture.centerX, y: gesture.centerY }, rect);
+  const deltaX = pointer.clientX - gesture.centerX;
+  const deltaY = pointer.clientY - gesture.centerY;
+  const primary = { x: gesture.centerX + deltaX, y: gesture.centerY + deltaY };
+  const secondary = { x: gesture.centerX - deltaX, y: gesture.centerY - deltaY };
+  const viewportPrimary = toViewportPoint(primary, rect);
+  const viewportSecondary = toViewportPoint(secondary, rect);
+  const guideDeltaX = viewportPrimary.x - viewportSecondary.x;
+  const guideDeltaY = viewportPrimary.y - viewportSecondary.y;
+  return {
+    center,
+    guideRotation: Math.atan2(guideDeltaY, guideDeltaX) * (180 / Math.PI),
+    guideWidth: Math.round(Math.hypot(guideDeltaX, guideDeltaY)),
+    primary: viewportPrimary,
+    secondary: viewportSecondary,
+  };
+}
+
+function toViewportPoint(point: ClientPoint, rect: DOMRect): ClientPoint {
+  return {
+    x: Math.round(point.x - rect.left),
+    y: Math.round(point.y - rect.top),
+  };
+}
+
+function PinchGestureOverlay({
+  overlay,
+}: {
+  readonly overlay: PinchOverlayState;
+}): React.ReactElement {
+  const overlayStyle = {
+    "--pinch-center-x": `${overlay.center.x}px`,
+    "--pinch-center-y": `${overlay.center.y}px`,
+    "--pinch-guide-rotation": `${overlay.guideRotation}deg`,
+    "--pinch-guide-width": `${overlay.guideWidth}px`,
+  } as React.CSSProperties;
+  return (
+    <div
+      aria-hidden="true"
+      className="pinch-overlay"
+      data-control-id="android.pinchOverlay"
+      style={overlayStyle}
+    >
+      <span className="pinch-overlay-guide" />
+      <span className="pinch-overlay-center" />
+      <PinchOverlayPoint controlId="android.pinchOverlay.primary" point={overlay.primary} />
+      <PinchOverlayPoint controlId="android.pinchOverlay.secondary" point={overlay.secondary} />
+    </div>
+  );
+}
+
+function PinchOverlayPoint({
+  controlId,
+  point,
+}: {
+  readonly controlId: string;
+  readonly point: ClientPoint;
+}): React.ReactElement {
+  const pointStyle = {
+    "--pinch-point-x": `${point.x}px`,
+    "--pinch-point-y": `${point.y}px`,
+  } as React.CSSProperties;
+  return <span className="pinch-overlay-point" data-control-id={controlId} style={pointStyle} />;
 }
 
 function DisconnectedPhonePlaceholder({

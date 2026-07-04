@@ -91,6 +91,13 @@ Use browser automation for the droid-webscr web UI:
   - Android app buttons and text are pixels inside the video canvas, not Web DOM nodes. Do not parse the Web DOM to find Android app controls.
   - When clicking inside Android, compute coordinates relative to the video canvas and account for scaling, rotation, and letterboxing.
 - Click Android app controls through the video canvas after visually locating them in the Android viewport.
+- Use `Ctrl`/`Cmd` + mouse drag on `[data-control-id="android.videoCanvas"]` for a synthetic two-finger pinch:
+  - The gesture is available only after the session is started and Android control is ready.
+  - Mouse down sends two touch-down points immediately: the cursor-side point and the point reflected across the viewport center anchor.
+  - Mouse move sends both points as a multi-touch move. The move-start threshold remains in the implementation but is currently set to `0`, so the first move is sent immediately.
+  - If either touch point would fall outside the Android viewport, that move is skipped and the last valid touch points are retained for release.
+  - Drag away from the center anchor to pinch out; drag toward the center anchor to pinch in.
+  - During the gesture, the Cyan Guide overlay shows the cursor-side point, reflected point, center anchor, and guide line. The overlay is hidden when Android control is not ready.
 - Type with the browser keyboard path when text input is part of the test.
 - Use the UI hardware controls for Back, Home, Overview, Power, volume, and rotation actions.
 - Stop the session at the end unless the user asks to leave it running.

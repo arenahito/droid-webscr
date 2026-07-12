@@ -1428,6 +1428,16 @@ describe("DroidWebscrApp", () => {
         inputType: "insertText",
       }),
     );
+    (textInput as HTMLTextAreaElement).value = "agent";
+    fireEvent(
+      textInput,
+      new InputEvent("input", {
+        bubbles: true,
+        cancelable: true,
+        data: null,
+        inputType: "insertText",
+      }),
+    );
     const sentAfterText = socket.sent.length;
     fireEvent(
       textInput,
@@ -1459,7 +1469,14 @@ describe("DroidWebscrApp", () => {
       MessageType.ControlKey,
       MessageType.ControlText,
       MessageType.ControlText,
+      MessageType.ControlText,
     ]);
+    expect(
+      socket.sent
+        .map((frame) => decodeFrame(frame))
+        .filter((frame) => frame.ok && frame.value.header.type === MessageType.ControlText)
+        .map((frame) => (frame.ok ? new TextDecoder().decode(frame.value.payload) : "")),
+    ).toEqual(["A", "agent", "語"]);
     expect(setPointerCapture).toHaveBeenCalledWith(23);
     expect(releasePointerCapture).toHaveBeenCalledWith(23);
   });

@@ -809,6 +809,31 @@ export function DroidWebscrApp({
     [sendTextValue],
   );
 
+  const sendTextInput = React.useCallback(
+    (event: React.FormEvent<HTMLTextAreaElement>) => {
+      const inputEvent = event.nativeEvent as InputEvent;
+      if (inputEvent.isComposing) {
+        return;
+      }
+      const text = extractInsertedText(inputEvent) ?? event.currentTarget.value;
+      if (!text) {
+        return;
+      }
+      event.preventDefault();
+      event.currentTarget.value = "";
+      sendTextValue(text);
+    },
+    [sendTextValue],
+  );
+
+  const sendCompositionText = React.useCallback(
+    (event: React.CompositionEvent<HTMLTextAreaElement>) => {
+      event.currentTarget.value = "";
+      sendTextValue(event.data);
+    },
+    [sendTextValue],
+  );
+
   const clearPointerGestureState = React.useCallback(() => {
     for (const pointerId of activePointerSlotsRef.current.keys()) {
       pointerGestureGenerationRef.current.set(
@@ -1266,7 +1291,7 @@ export function DroidWebscrApp({
               canvasRef={canvasRef}
               device={selectedDevice}
               onBeforeInput={sendText}
-              onCompositionEnd={(event) => sendTextValue(event.data)}
+              onCompositionEnd={sendCompositionText}
               onKeyDown={sendKey}
               onKeyUp={sendKey}
               onPointerCancel={(event) => sendPointer(event, "cancel")}
@@ -1278,6 +1303,7 @@ export function DroidWebscrApp({
                 }
               }}
               onPointerUp={(event) => sendPointer(event, "up")}
+              onTextInput={sendTextInput}
               onWheel={sendWheelScroll}
               pinchOverlay={pinchOverlay}
               rotation={rotation}
@@ -1672,6 +1698,7 @@ function AndroidViewport({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onTextInput,
   onWheel,
   pinchOverlay,
   rotation,
@@ -1689,6 +1716,7 @@ function AndroidViewport({
   readonly onPointerDown: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerMove: (event: React.PointerEvent<HTMLCanvasElement>) => void;
   readonly onPointerUp: (event: React.PointerEvent<HTMLCanvasElement>) => void;
+  readonly onTextInput: (event: React.FormEvent<HTMLTextAreaElement>) => void;
   readonly onWheel: (event: React.WheelEvent<HTMLCanvasElement>) => void;
   readonly pinchOverlay: PinchOverlayState | undefined;
   readonly rotation: number;
@@ -1743,9 +1771,9 @@ function AndroidViewport({
             autoCapitalize="off"
             autoCorrect="off"
             className="hidden-text-input"
-            onBeforeInput={onBeforeInput}
+            onBeforeInput={onTextInput}
             onCompositionEnd={onCompositionEnd}
-            onInput={onBeforeInput}
+            onInput={onTextInput}
             onKeyDown={onKeyDown}
             onKeyUp={onKeyUp}
             ref={textInputRef}

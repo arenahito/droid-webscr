@@ -268,6 +268,7 @@ describe("DroidWebscrApp", () => {
     ).toBeInTheDocument();
     expect(document.querySelector('[data-control-id="android.viewport"]')).toBeInTheDocument();
     expect(document.querySelector('[data-control-id="android.videoCanvas"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-control-id="android.capture"]')).toBeDisabled();
     const railButtons = screen
       .getByRole("navigation", { name: "Android hardware controls" })
       .querySelectorAll("button");
@@ -309,6 +310,100 @@ describe("DroidWebscrApp", () => {
         .querySelector<HTMLElement>(".phone-shell")
         ?.style.getPropertyValue("--phone-screen-aspect"),
     ).toBe("9 / 20");
+  });
+
+  it("captures the latest Android frame directly to the PNG clipboard", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const pipeline = new FakeVideoPipeline({
+      configured: true,
+      decodedFrames: 1,
+      droppedFrames: 0,
+      lastError: undefined,
+      pressure: false,
+      status: "ready",
+      videoSize: { height: 1920, width: 864 },
+    });
+    const png = new Blob(["png"], { type: "image/png" });
+    let resolveWrite: (() => void) | undefined;
+    const write = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+    class ClipboardItemMock {
+      public constructor(public readonly items: Record<string, Blob>) {}
+    }
+    vi.stubGlobal("ClipboardItem", ClipboardItemMock);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { write },
+    });
+
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipeline}
+      />,
+    );
+
+    const capture = document.querySelector<HTMLButtonElement>(
+      '[data-control-id="android.capture"]',
+    );
+    expect(capture).toBeDisabled();
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    socket.receive(new Uint8Array([1, 2, 3]));
+    await screen.findByText("Video ready");
+    expect(capture).toBeEnabled();
+
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      '[data-control-id="android.videoCanvas"]',
+    );
+    if (!canvas) {
+      throw new Error("Expected Android video canvas.");
+    }
+    canvas.width = 864;
+    canvas.height = 1920;
+    canvas.toBlob = vi.fn((callback) => callback(png));
+    await user.click(capture!);
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(capture).toBeDisabled();
+    expect(document.querySelector('[data-control-id="android.captureStatus"]')).toHaveTextContent(
+      "Copying PNG",
+    );
+    expect(document.querySelector('[data-control-id="android.captureResult"]')).toBeNull();
+    expect(document.querySelector('[data-control-id="android.captureDownload"]')).toBeNull();
+
+    resolveWrite?.();
+    await waitFor(() =>
+      expect(document.querySelector('[data-control-id="android.captureStatus"]')).toHaveTextContent(
+        "PNG copied",
+      ),
+    );
+    expect(capture).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    vi.unstubAllGlobals();
   });
 
   it("exposes stable control ids and device serials for browser automation", async () => {
@@ -3442,7 +3537,7 @@ describe("DroidWebscrApp", () => {
     await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(screen.getByRole("complementary", { name: "Device controls" })).toBeVisible();
 
-    expect(screen.queryByRole("button", { name: "Capture" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Capture" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Record" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Bind" })).not.toBeInTheDocument();

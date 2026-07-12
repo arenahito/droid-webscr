@@ -79,6 +79,7 @@ Use browser automation for the droid-webscr web UI:
   - Use `[data-control-id="session.start"]` and `[data-control-id="session.stop"]` to start and stop sessions.
   - Use `[data-control-id="device.refresh"]` and `[data-control-id="device.connectEndpoint"]` for device discovery.
   - Use `[data-control-id="android.back"]`, `android.home`, `android.overview`, `android.power`, `android.volumeUp`, `android.volumeDown`, `android.rotateLeft`, `android.rotateRight`, and `android.keyEvent` for Android hardware controls.
+  - Use `[data-control-id="android.capture"]` to capture the latest decoded Android frame and copy it directly to the clipboard as `image/png`.
   - Use `[data-control-id="log.expand"]`, `log.collapse`, `log.start`, `log.stop`, and `log.clear` for device-log controls.
   - Fall back to accessible role/name queries only when a stable control ID is not present.
 - Keep default video settings unless bitrate or frame rate matters to the test.
@@ -90,7 +91,39 @@ Use browser automation for the droid-webscr web UI:
   - Use `[data-control-id="android.videoCanvas"]` as the input surface for Android app taps, drags, keyboard focus, and cropped visual checks.
   - Android app buttons and text are pixels inside the video canvas, not Web DOM nodes. Do not parse the Web DOM to find Android app controls.
   - When clicking inside Android, compute coordinates relative to the video canvas and account for scaling, rotation, and letterboxing.
-- Click Android app controls through the video canvas after visually locating them in the Android viewport.
+- Prefer the built-in still-capture flow for visual evidence after Android video is ready:
+  1. Click `[data-control-id="android.capture"]`.
+  2. Wait for `[data-control-id="android.captureStatus"]` to progress from `Capturing PNG` to `Copying PNG`, then `PNG copied`.
+  3. Read the clipboard item and require MIME type `image/png` before using it as Android visual evidence.
+  4. Repeat Capture before every read so stale clipboard content is never treated as the current Android screen.
+- Clipboard permission is a user-controlled boundary. If the status remains `Copying PNG`, a clipboard permission prompt appears, or the clipboard has no `image/png` item:
+  1. Stop the workflow immediately.
+  2. Do not take an independent page screenshot, crop `android.videoCanvas`, invent a download fallback, or repeatedly click Capture.
+  3. Ask the user to allow clipboard access in the in-app browser and tell you when permission has been granted.
+  4. After the user confirms, first allow the pending copy to finish. If it does not finish, click Capture once and re-check `android.captureStatus` and the `image/png` clipboard item.
+- If capture reports an explicit clipboard error instead of waiting for permission, report the error and stop. Use another capture path only when the user explicitly authorizes that fallback.
+- The captured PNG contains only the current decoded `android.videoCanvas` frame at its backing resolution. It does not include the phone frame, hardware rail, status labels, or device log.
+- Convert a target found in the captured PNG to browser coordinates before every pointer action:
+  1. Read the current PNG width and height.
+  2. Immediately before the action, read the latest bounding rectangle of `[data-control-id="android.videoCanvas"]`.
+  3. Convert the PNG target independently on each axis:
+
+     ```text
+     browserX = canvasLeft + pngX / pngWidth * canvasWidth
+     browserY = canvasTop  + pngY / pngHeight * canvasHeight
+     ```
+
+  4. Confirm the PNG target is inside the PNG and the converted point is inside the current canvas rectangle.
+  5. Click the converted browser point once.
+
+- Never reuse a canvas rectangle after browser resize, sidebar or log-drawer changes, device rotation, video reconfiguration, session restart, or any layout change. Read it again even when the PNG dimensions are unchanged.
+- Use separate horizontal and vertical scale factors. Do not assume uniform scaling or use the phone shell, viewport frame, page screenshot, or hardware rail as the coordinate origin.
+- Treat a capture made during animation, loading, keyboard appearance, or app launch as an intermediate frame:
+  1. Do not choose the next target from an incomplete transition frame.
+  2. Wait for the expected Android state to become visibly settled.
+  3. Capture again and use only the settled PNG for the next coordinate calculation.
+- After each pointer action, Capture again and confirm the expected visible result before continuing. A changed PNG proves only that a frame changed; inspect the Android state to prove the intended control was activated.
+- Keep text input separate from pointer-coordinate mapping. Focus the intended Android field with a converted canvas click, use the browser keyboard path through `Android text input`, then Capture and verify the entered text or resulting screen. If text is absent, stop and diagnose the input path instead of assuming the coordinate click failed or continuing with Enter/submit.
 - Use `Ctrl`/`Cmd` + mouse drag on `[data-control-id="android.videoCanvas"]` for a synthetic two-finger pinch:
   - The gesture is available only after the session is started and Android control is ready.
   - Mouse down sends two touch-down points immediately: the cursor-side point and the point reflected across the viewport center anchor.
@@ -123,7 +156,8 @@ Collect only evidence that helps the user trust the browser-driven result:
 - The `Agent API:` URL when it differs from the Web UI URL.
 - The selected device model or serial.
 - Screenshots before and after meaningful Android interactions.
-- Cropped screenshots of the `android.viewport` or `android.videoCanvas` area when page-level screenshots would make the Android result ambiguous.
+- PNGs copied by the built-in Capture flow for Android-only visual evidence.
+- Page or viewport screenshots when the surrounding droid-webscr status, phone frame, overlays, or logs are part of the assertion.
 - Relevant droid-webscr status text.
 - Short device log excerpts when logs explain the tested behavior or failure.
 - Terminal errors only when they explain why the browser flow failed.

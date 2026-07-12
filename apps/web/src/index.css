@@ -286,6 +286,19 @@ select:disabled {
   gap: 8px;
 }
 
+.topbar .capture-trigger {
+  background: var(--color-action-surface);
+  border-color: var(--color-action-border);
+  color: var(--color-action-foreground);
+  height: 30px;
+  min-width: 94px;
+}
+
+.topbar .capture-trigger svg {
+  height: 16px;
+  width: 16px;
+}
+
 .main-grid {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);

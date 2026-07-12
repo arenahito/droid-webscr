@@ -1,6 +1,7 @@
 import * as React from "react";
 import {
   ArrowLeft,
+  Camera,
   ChevronDown,
   ChevronUp,
   Check,
@@ -36,6 +37,7 @@ import {
   SystemControlAction,
 } from "@droid-webscr/protocol";
 import { Button } from "./components/ui/button.js";
+import { captureCanvasPng, copyPngToClipboard } from "./capture/capture-still.js";
 import { createNativeVideoDecoderAdapter } from "./decoder/video-decoder.js";
 import {
   createVideoPipeline,
@@ -174,6 +176,8 @@ export function DroidWebscrApp({
   const [loadingDevices, setLoadingDevices] = React.useState(true);
   const [theme, setTheme] = React.useState<ThemePreference>(() => readTheme(storage));
   const [videoSnapshot, setVideoSnapshot] = React.useState<VideoPipelineSnapshot | undefined>();
+  const [captureMessage, setCaptureMessage] = React.useState("Ready to capture");
+  const [capturePending, setCapturePending] = React.useState(false);
   const [controlReady, setControlReadyState] = React.useState(false);
   const [bitrateMbps, setBitrateMbps] = React.useState(4);
   const [fps, setFps] = React.useState(30);
@@ -213,6 +217,7 @@ export function DroidWebscrApp({
   const [pinchOverlay, setPinchOverlay] = React.useState<PinchOverlayState | undefined>(undefined);
   const sequenceRef = React.useRef(1n);
   const menuShortcutKeyDownRef = React.useRef(false);
+  const captureGenerationRef = React.useRef(0);
   const selectedDevice = devices.find((device) => device.serial === state.selectedSerial);
   const useDesignApiFallback = shouldUseDesignApiFallback(client) && !agentBaseUrl;
   const [viewportRef, viewportSize] = useElementSize<HTMLElement>();
@@ -240,6 +245,38 @@ export function DroidWebscrApp({
     setToast(message);
     window.setTimeout(() => setToast(undefined), 1600);
   }, []);
+
+  const captureStill = React.useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !videoSnapshot?.configured || videoSnapshot.decodedFrames < 1) {
+      return;
+    }
+    const generation = captureGenerationRef.current + 1;
+    captureGenerationRef.current = generation;
+    setCapturePending(true);
+    setCaptureMessage("Capturing PNG");
+    try {
+      const blob = await captureCanvasPng(canvas);
+      setCaptureMessage("Copying PNG");
+      await copyPngToClipboard(blob);
+      if (captureGenerationRef.current !== generation) {
+        return;
+      }
+      setCaptureMessage("PNG copied");
+      notify("PNG copied");
+    } catch (error) {
+      if (captureGenerationRef.current !== generation) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "PNG capture failed";
+      setCaptureMessage(message);
+      notify(message);
+    } finally {
+      if (captureGenerationRef.current === generation) {
+        setCapturePending(false);
+      }
+    }
+  }, [notify, videoSnapshot]);
 
   const clearPendingDeviceLogs = React.useCallback(() => {
     pendingDeviceLogsRef.current = [];
@@ -431,6 +468,9 @@ export function DroidWebscrApp({
       pipeline?.close();
       clearCanvas(canvasRef.current);
       setVideoSnapshot(undefined);
+      captureGenerationRef.current += 1;
+      setCaptureMessage("Ready to capture");
+      setCapturePending(false);
       dispatch({ type: "stop" });
     },
     [setControlReady],
@@ -1181,7 +1221,13 @@ export function DroidWebscrApp({
     >
       <Topbar
         bitrateMbps={bitrateMbps}
+        captureEnabled={Boolean(
+          state.selectedSerial && videoSnapshot?.configured && videoSnapshot.decodedFrames > 0,
+        )}
+        captureMessage={captureMessage}
+        capturePending={capturePending}
         fps={fps}
+        onCapture={() => void captureStill()}
         onReconfigure={sendVideoReconfigure}
         onStart={() => void startSession()}
         onStop={stopSession}
@@ -1301,7 +1347,11 @@ export function DroidWebscrApp({
 
 function Topbar({
   bitrateMbps,
+  captureEnabled,
+  captureMessage,
+  capturePending,
   fps,
+  onCapture,
   onReconfigure,
   onStart,
   onStop,
@@ -1314,7 +1364,11 @@ function Topbar({
   theme,
 }: {
   readonly bitrateMbps: number;
+  readonly captureEnabled: boolean;
+  readonly captureMessage: string;
+  readonly capturePending: boolean;
   readonly fps: number;
+  readonly onCapture: () => void;
   readonly onReconfigure: (bitrateMbps: number, fps: number) => void;
   readonly onStart: () => void;
   readonly onStop: () => void;
@@ -1396,6 +1450,19 @@ function Topbar({
           <option value={60}>60 fps</option>
         </select>
       </label>
+      <Button
+        className="capture-trigger"
+        data-control-id="android.capture"
+        disabled={!captureEnabled || capturePending}
+        onClick={onCapture}
+        variant="outline"
+      >
+        <Camera aria-hidden="true" data-icon="inline-start" />
+        {capturePending ? "Capturing" : "Capture"}
+      </Button>
+      <span aria-live="polite" className="compat-text" data-control-id="android.captureStatus">
+        {captureMessage}
+      </span>
       <div className="topbar-spacer" />
       <Button
         aria-label={theme === "dark" ? "Light theme" : "Dark theme"}

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/arenahito/droid-webscr/compare/v0.5.0...v0.6.0) (2026-07-12)
+
+
+### Features
+
+* **web:** copy Android captures to clipboard ([e0a44a5](https://github.com/arenahito/droid-webscr/commit/e0a44a53c8e753a300af550014587c579f6cddd4))
+
+
+### Bug Fixes
+
+* **web:** support automated Android text input ([e44104f](https://github.com/arenahito/droid-webscr/commit/e44104f624af33aaf45ea9679fe02985e501de62))
+
 ## [0.5.0](https://github.com/arenahito/droid-webscr/compare/v0.4.0...v0.5.0) (2026-07-04)
 
 

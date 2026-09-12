@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/arenahito/droid-webscr/compare/v0.6.0...v0.6.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* harden session lifecycle and runtime boundaries ([44a9083](https://github.com/arenahito/droid-webscr/commit/44a9083540b702787e37a24c066f7129e8cf11b1))
+
 ## [0.6.0](https://github.com/arenahito/droid-webscr/compare/v0.5.0...v0.6.0) (2026-07-12)
 
 

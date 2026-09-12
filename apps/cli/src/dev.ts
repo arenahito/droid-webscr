@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { isDirectRun, startAgent, type WebUiProvider } from "@droid-webscr/agent";
+import {
+  deviceServerArtifactFileName,
+  deviceServerArtifactRemotePath,
+  isDirectRun,
+  startAgent,
+  type WebUiProvider,
+} from "@droid-webscr/agent";
 import { createServer as createViteServer } from "vite";
 import packageJson from "../package.json" with { type: "json" };
 import { runCli, type RuntimeStartOptions } from "./cli.js";
@@ -19,9 +25,14 @@ export interface DevelopmentWebUiOptions {
   readonly webRoot: string;
 }
 
+export interface DevelopmentRuntimeDependencies {
+  readonly createWebUi?: typeof createDevelopmentWebUi | undefined;
+  readonly startAgent?: typeof startAgent | undefined;
+  readonly workspaceRoot?: string | undefined;
+}
+
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const workspaceRoot = dirname(dirname(packageRoot));
-const webRoot = join(workspaceRoot, "apps", "web");
 
 export async function createDevelopmentWebUi(
   options: DevelopmentWebUiOptions,
@@ -51,15 +62,28 @@ export async function createDevelopmentWebUi(
   };
 }
 
-export async function startDevelopmentRuntime(options: RuntimeStartOptions) {
-  return startAgent({
+export async function startDevelopmentRuntime(
+  options: RuntimeStartOptions,
+  dependencies: DevelopmentRuntimeDependencies = {},
+) {
+  const developmentRoot = dependencies.workspaceRoot ?? workspaceRoot;
+  const createWebUi = dependencies.createWebUi ?? createDevelopmentWebUi;
+  const start = dependencies.startAgent ?? startAgent;
+  return start({
     config: {
       authToken: options.authToken,
       bindHost: options.host,
       clipboard: { enabled: false },
       port: options.port,
     },
-    webUi: await createDevelopmentWebUi({ webRoot }, { authToken: options.authToken }),
+    deviceServerArtifact: {
+      localPath: join(developmentRoot, "android", "server", "build", deviceServerArtifactFileName),
+      remotePath: deviceServerArtifactRemotePath,
+    },
+    webUi: await createWebUi(
+      { webRoot: join(developmentRoot, "apps", "web") },
+      { authToken: options.authToken },
+    ),
   });
 }
 

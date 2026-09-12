@@ -1322,6 +1322,43 @@ describe("agent server", () => {
     await app.close();
   });
 
+  it("closes the browser socket when the device stream reaches EOF", async () => {
+    const context = testContext();
+    let stopCalls = 0;
+    const app = await createFastifyApp({
+      ...context,
+      deviceServer: {
+        async start(serial) {
+          return {
+            frames: emptyByteStream(),
+            serial,
+            stop: async () => {
+              stopCalls += 1;
+            },
+            write: async () => {},
+          };
+        },
+      },
+    });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { serial: "emulator-5554" },
+    });
+    const session = created.json();
+    const ws = await app.injectWS(`/ws/session/${session.sessionId}?token=${session.token}`, {
+      headers: { host: "localhost:7391", "sec-websocket-protocol": binaryWebSocketProtocol },
+    });
+    try {
+      await expect.poll(() => ws.readyState, { timeout: 1000 }).toBe(3);
+      expect(stopCalls).toBe(1);
+    } finally {
+      ws.terminate();
+      await app.close();
+    }
+    expect(stopCalls).toBe(1);
+  });
+
   it("buffers browser frames sent while the device server is still starting", async () => {
     let releaseStart: (() => void) | undefined;
     const writes: Uint8Array[] = [];

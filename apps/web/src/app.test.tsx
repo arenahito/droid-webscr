@@ -726,9 +726,13 @@ describe("DroidWebscrApp", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(document.querySelector(".phone-shell")).toHaveClass("rotation-180");
     await user.click(screen.getByRole("button", { name: "Start" }));
     socket.open();
     await screen.findByText("Session s-emulator");
+    expect(document.querySelector(".phone-shell")).not.toHaveClass("rotation-180");
     socket.receive(new Uint8Array([1, 2, 3]));
 
     expect(await screen.findByText("Video ready")).toBeInTheDocument();
@@ -1114,9 +1118,11 @@ describe("DroidWebscrApp", () => {
     sockets[1]!.open();
     await screen.findByText("Session s-2");
     sockets[0]!.remoteClose();
+    sockets[0]!.receive(new Uint8Array([1, 2, 3]));
 
     expect(screen.getByText("Session s-2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
+    expect(pipelines[0]!.accepted).toEqual([]);
     expect(pipelines[1]!.closed).toBe(false);
   });
 
@@ -1216,6 +1222,56 @@ describe("DroidWebscrApp", () => {
     expect(socket.closed).toBe(true);
     expect(pipeline.closed).toBe(true);
     expect(() => socket.remoteClose()).not.toThrow();
+  });
+
+  it("finishes session cleanup when the video pipeline close throws", async () => {
+    const user = userEvent.setup();
+    const socket = new FakeBinaryWebSocket();
+    const pipeline = new FakeVideoPipeline(
+      {
+        configured: true,
+        decodedFrames: 1,
+        droppedFrames: 0,
+        lastError: undefined,
+        pressure: false,
+        status: "ready",
+        videoSize: { height: 1280, width: 720 },
+      },
+      new Error("VideoDecoder is already closed"),
+    );
+    render(
+      <DroidWebscrApp
+        client={{
+          createSession: async () => ({
+            sessionId: "s-emulator",
+            serial: "emulator-5554",
+            token: "token-emulator",
+          }),
+          listDevices: async () => [
+            {
+              authorizationState: "authorized",
+              model: "Pixel 8",
+              serial: "emulator-5554",
+              transportKind: "emulator",
+            },
+          ],
+        }}
+        sessionSocketFactory={() => new SessionSocket(socket)}
+        storage={createMemoryStorage()}
+        videoPipelineFactory={() => pipeline}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Pixel 8 emulator-5554/ }));
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    socket.open();
+    await screen.findByText("Session s-emulator");
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(pipeline.closed).toBe(true);
+    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
+    expect(screen.queryByText("Session s-emulator")).not.toBeInTheDocument();
   });
 
   it("shows unsupported decoder state from the video pipeline", async () => {
@@ -3172,11 +3228,6 @@ describe("DroidWebscrApp", () => {
           createSession: async () => ({ sessionId: "s1", serial: "emulator-5554", token: "t1" }),
           listDevices: async () => [],
         }}
-        initialLogs={[
-          "10:42:10.231 INFO stream Starting stream",
-          "10:42:11.004 WARN encoder Bitrate pressure detected",
-          "Session stopped",
-        ]}
         storage={storage}
       />,
     );
@@ -4045,7 +4096,10 @@ class FakeVideoPipeline implements VideoPipeline {
   public closed = false;
   public resetCount = 0;
 
-  public constructor(private readonly nextSnapshot: VideoPipelineSnapshot) {}
+  public constructor(
+    private readonly nextSnapshot: VideoPipelineSnapshot,
+    private readonly closeError?: Error,
+  ) {}
 
   public async acceptFrame(frame: Uint8Array): Promise<VideoPipelineSnapshot> {
     this.accepted.push(frame);
@@ -4054,6 +4108,9 @@ class FakeVideoPipeline implements VideoPipeline {
 
   public close(): void {
     this.closed = true;
+    if (this.closeError) {
+      throw this.closeError;
+    }
   }
 
   public reset(): void {

@@ -97,11 +97,76 @@ describe("video pipeline", () => {
     await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
     pipeline.reset();
     pipeline.close();
+    pipeline.close();
 
     expect(adapter.resetCount).toBe(1);
     expect(adapter.closeCount).toBe(1);
     expect(pipeline.snapshot().configured).toBe(false);
     expect(pipeline.snapshot().status).toBe("closed");
+  });
+
+  it("does not recreate a decoder after the pipeline closes", async () => {
+    const adapters = [new RecordingVideoDecoderAdapter(), new RecordingVideoDecoderAdapter()];
+    let createCount = 0;
+    const pipeline = createVideoPipeline({
+      createDecoder: () => adapters[createCount++]!,
+    });
+
+    await pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    pipeline.close();
+    await pipeline.acceptFrame(createVideoConfigFrame(1280, 720, []));
+
+    expect(createCount).toBe(1);
+    expect(adapters[0]!.closeCount).toBe(1);
+    expect(adapters[1]!.configs).toEqual([]);
+    expect(pipeline.snapshot().status).toBe("closed");
+  });
+
+  it("stays closed when a pending decoder configuration resolves", async () => {
+    const adapter = new RecordingVideoDecoderAdapter();
+    let resolveConfigure: (() => void) | undefined;
+    adapter.configurePromise = new Promise((resolve) => {
+      resolveConfigure = resolve;
+    });
+    const configuredSizes: Array<{ readonly height: number; readonly width: number }> = [];
+    const pipeline = createVideoPipeline({
+      createDecoder: () => adapter,
+      onVideoConfig: (size) => configuredSizes.push(size),
+    });
+
+    const pendingFrame = pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    pipeline.close();
+    resolveConfigure?.();
+    const result = await pendingFrame;
+
+    expect(result).toMatchObject({
+      configured: false,
+      lastError: undefined,
+      status: "closed",
+      videoSize: undefined,
+    });
+    expect(configuredSizes).toEqual([]);
+  });
+
+  it("stays closed when a pending decoder configuration rejects", async () => {
+    const adapter = new RecordingVideoDecoderAdapter();
+    let rejectConfigure: ((error: Error) => void) | undefined;
+    adapter.configurePromise = new Promise((_, reject) => {
+      rejectConfigure = reject;
+    });
+    const pipeline = createVideoPipeline({ createDecoder: () => adapter });
+
+    const pendingFrame = pipeline.acceptFrame(createVideoConfigFrame(720, 1280, []));
+    pipeline.close();
+    rejectConfigure?.(new Error("configure failed after close"));
+    const result = await pendingFrame;
+
+    expect(result).toMatchObject({
+      configured: false,
+      lastError: undefined,
+      status: "closed",
+      videoSize: undefined,
+    });
   });
 
   it("reports unsupported WebCodecs states without throwing", async () => {
@@ -196,6 +261,7 @@ class RecordingVideoDecoderAdapter implements VideoDecoderAdapter {
   }> = [];
   public readonly configs: VideoDecoderConfig[] = [];
   public closeCount = 0;
+  public configurePromise: Promise<void> | undefined;
   public decodeQueueSize = 0;
   public failNextConfigure: Error | undefined;
   public resetCount = 0;
@@ -204,13 +270,14 @@ class RecordingVideoDecoderAdapter implements VideoDecoderAdapter {
     this.closeCount += 1;
   }
 
-  public configure(config: VideoDecoderConfig): void {
+  public configure(config: VideoDecoderConfig): void | Promise<void> {
     if (this.failNextConfigure) {
       const error = this.failNextConfigure;
       this.failNextConfigure = undefined;
       throw error;
     }
     this.configs.push(config);
+    return this.configurePromise;
   }
 
   public decode(chunk: {

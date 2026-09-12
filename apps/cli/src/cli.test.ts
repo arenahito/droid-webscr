@@ -40,6 +40,7 @@ describe("droid-webscr integrated CLI", () => {
 
     const exitCode = await runCli(["node", "droid-webscr"], {
       createAuthToken: () => "generated-token",
+      signalSource: new FakeSignalSource(),
       startRuntime: start,
       stderr: vi.fn(),
       stdout,
@@ -58,6 +59,36 @@ describe("droid-webscr integrated CLI", () => {
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining("Auth token: generated-token"));
   });
 
+  it("closes the runtime once when termination signals overlap", async () => {
+    const signals = new FakeSignalSource();
+    let finishClose: (() => void) | undefined;
+    const closing = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const close = vi.fn(() => closing);
+
+    await runCli(["node", "droid-webscr"], {
+      createAuthToken: () => "generated-token",
+      signalSource: signals,
+      startRuntime: vi.fn().mockResolvedValue({
+        close,
+        url: "http://127.0.0.1:7391",
+      }),
+      stderr: vi.fn(),
+      stdout: vi.fn(),
+    });
+
+    const interrupt = signals.emit("SIGINT");
+    const terminate = signals.emit("SIGTERM");
+    expect(close).toHaveBeenCalledTimes(1);
+
+    finishClose?.();
+    await Promise.all([interrupt, terminate]);
+
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
   it("passes host port and explicit auth token to the integrated runtime", async () => {
     const start = vi.fn().mockResolvedValue({ close: vi.fn(), url: "http://127.0.0.1:7400" });
 
@@ -65,6 +96,7 @@ describe("droid-webscr integrated CLI", () => {
       ["node", "droid-webscr", "--host", "0.0.0.0", "--port", "7400", "--auth-token", "secret"],
       {
         createAuthToken: () => "generated-token",
+        signalSource: new FakeSignalSource(),
         startRuntime: start,
         stderr: vi.fn(),
         stdout: vi.fn(),
@@ -95,6 +127,7 @@ describe("droid-webscr integrated CLI", () => {
         "secret",
       ],
       {
+        signalSource: new FakeSignalSource(),
         startRuntime: vi.fn(),
         startWebUi,
         stderr: vi.fn(),
@@ -150,3 +183,29 @@ describe("droid-webscr integrated CLI", () => {
     expect(createCliHelp()).toContain("--agent-url");
   });
 });
+
+type Signal = "SIGINT" | "SIGTERM";
+
+class FakeSignalSource {
+  readonly #listeners = new Map<Signal, Set<() => void | Promise<void>>>();
+
+  once(signal: Signal, listener: () => void | Promise<void>): void {
+    const listeners = this.#listeners.get(signal) ?? new Set();
+    listeners.add(listener);
+    this.#listeners.set(signal, listeners);
+  }
+
+  off(signal: Signal, listener: () => void | Promise<void>): void {
+    this.#listeners.get(signal)?.delete(listener);
+  }
+
+  async emit(signal: Signal): Promise<void> {
+    const listeners = [...(this.#listeners.get(signal) ?? [])];
+    this.#listeners.delete(signal);
+    await Promise.all(listeners.map((listener) => listener()));
+  }
+
+  listenerCount(signal: Signal): number {
+    return this.#listeners.get(signal)?.size ?? 0;
+  }
+}

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   AdbAuthorizationState,
@@ -144,6 +145,13 @@ bare123 device
   it("parses empty system adb output as an empty device list", () => {
     expect(new SystemAdbProvider()).toBeInstanceOf(SystemAdbProvider);
     expect(SystemAdbProvider.parseDevices("List of devices attached\n")).toEqual([]);
+  });
+
+  it("rejects when the adb executable is missing", async () => {
+    const missingAdbPath = `missing-adb-${randomUUID()}`;
+    const provider = new SystemAdbProvider(missingAdbPath);
+
+    await expect(provider.listDevices()).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("builds adb forward arguments for Android localabstract sockets", () => {

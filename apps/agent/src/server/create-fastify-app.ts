@@ -66,10 +66,18 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
   const app = Fastify({
     logger: createLoggerOptions(context.logger),
   }) as unknown as AgentFastifyApp;
-  if (context.webUi?.devMiddleware) {
+  registerWebUiRoutes(app, context.webUi);
+  const devMiddleware = context.webUi?.devMiddleware;
+  if (devMiddleware) {
     await app.register(middie);
     (app as AgentFastifyApp & { use: (middleware: WebMiddleware) => void }).use(
-      context.webUi.devMiddleware,
+      (request, response, next) => {
+        if (!isWebUiPath(request.url ?? "/")) {
+          next();
+          return;
+        }
+        return devMiddleware(request, response, next);
+      },
     );
   }
   await app.register(websocket, {
@@ -120,7 +128,6 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
   app.closeActiveDeviceSessions = closeActiveSessions;
   app.addHook("preClose", async () => {
     await closeActiveSessions({ waitForStartup: true });
-    await context.webUi?.close?.();
   });
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
@@ -284,14 +291,13 @@ export async function createFastifyApp(context: AgentAppContext): Promise<AgentF
           closeBrowserSocket(socket, 1011, "Device session failed");
         })
         .finally(() => {
+          closeBrowserSocket(socket, 1000, "Device session ended");
           activeBrowserSockets.delete(socket);
           activeSessionClosers.delete(close);
           void close();
         });
     },
   );
-
-  registerWebUiRoutes(app, context.webUi);
 
   return app;
 }
@@ -325,12 +331,21 @@ export function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider |
   if (!webUi) {
     return;
   }
-  app.get("/*", async (request, reply) => {
-    const path = request.url.split("?")[0] ?? "/";
-    if (path.startsWith("/api/") || path === "/api" || path.startsWith("/ws/") || path === "/ws") {
-      return reply.code(404).send({ error: "Not found" });
+  app.addHook("onRequest", async (request, reply) => {
+    if (!isWebUiPath(request.url)) {
+      return;
+    }
+    if (!isLocalWebUiHost(request.headers.host)) {
+      await reply.code(403).send({ error: "Invalid host" });
+      return;
     }
     if (!isLocalWebUiRequest(request)) {
+      await reply.code(404).send({ error: "Not found" });
+    }
+  });
+  app.get("/*", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "/";
+    if (!isWebUiPath(path)) {
       return reply.code(404).send({ error: "Not found" });
     }
     if (webUi.renderIndex && isWebUiDocumentPath(path)) {
@@ -349,6 +364,27 @@ export function registerWebUiRoutes(app: FastifyInstance, webUi: WebUiProvider |
     }
     return reply.code(404).send({ error: "Not found" });
   });
+}
+
+function isWebUiPath(url: string): boolean {
+  const path = url.split("?")[0] ?? "/";
+  return !(
+    path === "/api" ||
+    path.startsWith("/api/") ||
+    path === "/ws" ||
+    path.startsWith("/ws/")
+  );
+}
+
+function isLocalWebUiHost(host: string | undefined): boolean {
+  if (!host) {
+    return false;
+  }
+  const match = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::([0-9]{1,5}))?$/i.exec(host);
+  return (
+    match !== null &&
+    (match[1] === undefined || (Number(match[1]) > 0 && Number(match[1]) <= 65535))
+  );
 }
 
 export function isLocalWebUiRequest(request: FastifyRequest): boolean {

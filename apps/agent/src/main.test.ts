@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FakeAdbProvider } from "@droid-webscr/adb";
 import net from "node:net";
@@ -16,6 +19,32 @@ describe("isDirectRun", () => {
     expect(
       isDirectRun("file:///repo/apps/agent/dist/main.js", ["/node", "/repo/tools/dev.js"]),
     ).toBe(false);
+  });
+
+  it("accepts an entrypoint reached through a symlinked directory", () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "droid-webscr-direct-run-"));
+    const targetDirectory = join(temporaryRoot, "target");
+    const aliasDirectory = join(temporaryRoot, "alias");
+    const targetEntrypoint = join(targetDirectory, "main.js");
+
+    try {
+      mkdirSync(targetDirectory);
+      writeFileSync(targetEntrypoint, "export {};\n");
+      symlinkSync(
+        targetDirectory,
+        aliasDirectory,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(
+        isDirectRun(pathToFileURL(targetEntrypoint).href, [
+          process.execPath,
+          join(aliasDirectory, "main.js"),
+        ]),
+      ).toBe(true);
+    } finally {
+      rmSync(temporaryRoot, { force: true, recursive: true });
+    }
   });
 });
 

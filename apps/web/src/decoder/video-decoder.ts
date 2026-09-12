@@ -7,8 +7,16 @@ export interface VideoDecoderBoundary {
 }
 
 export function createVideoDecoderBoundary(decoder: VideoDecoder): VideoDecoderBoundary {
+  let closed = decoder.state === "closed";
   return {
-    close: () => decoder.close(),
+    close: () => {
+      if (closed || decoder.state === "closed") {
+        closed = true;
+        return;
+      }
+      closed = true;
+      decoder.close();
+    },
     configure: (config) => decoder.configure(config),
     decode: (chunk) => decoder.decode(chunk),
   };
@@ -26,22 +34,26 @@ export function createNativeVideoDecoderAdapter(
 }
 
 class NativeVideoDecoderAdapter implements VideoDecoderAdapter {
-  public constructor(private readonly decoder: VideoDecoder) {}
+  private readonly boundary: VideoDecoderBoundary;
+
+  public constructor(private readonly decoder: VideoDecoder) {
+    this.boundary = createVideoDecoderBoundary(decoder);
+  }
 
   public get decodeQueueSize(): number {
     return this.decoder.decodeQueueSize;
   }
 
   public close(): void {
-    this.decoder.close();
+    this.boundary.close();
   }
 
   public configure(config: VideoDecoderConfig): void {
-    this.decoder.configure(config);
+    this.boundary.configure(config);
   }
 
   public decode(chunk: DecodableVideoChunk): void {
-    this.decoder.decode(
+    this.boundary.decode(
       new EncodedVideoChunk({
         data: chunk.data,
         timestamp: chunk.timestamp,

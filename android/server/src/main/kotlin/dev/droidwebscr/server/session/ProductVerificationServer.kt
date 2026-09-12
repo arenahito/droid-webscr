@@ -4,6 +4,7 @@ import android.content.res.Resources
 import android.net.LocalServerSocket
 import android.util.Log
 import dev.droidwebscr.server.capture.CaptureConfig
+import dev.droidwebscr.server.capture.CaptureSession
 import dev.droidwebscr.server.capture.DisplayCaptureBackend
 import dev.droidwebscr.server.capture.ShellDisplayCaptureBackend
 import dev.droidwebscr.server.codec.MediaCodecVideoEncoder
@@ -154,36 +155,47 @@ class ProductVerificationServer(
     }
 }
 
-private class ActiveVideoSession(
+internal class ActiveVideoSession(
     private val captureBackend: DisplayCaptureBackend,
     private val encoder: VideoEncoder,
     private val frameWriter: SessionFrameWriter,
     private val inputInjectorFactory: (InputDisplayBounds) -> InputInjector,
     private val initialVideoSettings: InitialVideoSettings,
+    private val firstFrameTimeoutMs: Long = 5_000,
+    private val logInfo: (String) -> Unit = { message -> Log.i(TAG, message) },
 ) : Closeable {
     private var active: ActiveSession? = null
+    private var videoSettings = VideoSettings(
+        bitrate = initialVideoSettings.bitrateMbps * 1_000_000,
+        fps = initialVideoSettings.fps,
+    )
 
     @Synchronized
     fun start(displaySize: DisplaySize) {
         require(active == null) { "Video session is already active." }
         active = createActiveSession(
             displaySize = displaySize,
-            bitrate = initialVideoSettings.bitrateMbps * 1_000_000,
-            fps = initialVideoSettings.fps,
+            bitrate = videoSettings.bitrate,
+            fps = videoSettings.fps,
         )
     }
 
     @Synchronized
     fun replaceIfDisplaySizeChanged(displaySize: DisplaySize) {
-        val current = active ?: return
-        if (current.displaySize == displaySize) {
+        val current = active
+        if (current?.displaySize == displaySize) {
             return
         }
-        Log.i(TAG, "Display size changed from ${current.displaySize} to $displaySize; restarting capture.")
-        val bitrate = current.config.bitrate
-        val fps = current.config.fps
-        current.close(encoder)
-        active = createActiveSession(displaySize = displaySize, bitrate = bitrate, fps = fps)
+        if (current != null) {
+            logInfo("Display size changed from ${current.displaySize} to $displaySize; restarting capture.")
+            active = null
+            current.close(encoder)
+        }
+        active = createActiveSession(
+            displaySize = displaySize,
+            bitrate = videoSettings.bitrate,
+            fps = videoSettings.fps,
+        )
     }
 
     @Synchronized
@@ -204,63 +216,107 @@ private class ActiveVideoSession(
             bitrate = bitrate,
             fps = fps,
         ).validated()
-        Log.i(TAG, "Starting capture ${config.width}x${config.height} from display $displaySize.")
-        encoder.start(config)
-        val captureSession = captureBackend.start(
-            CaptureConfig(
-                displayId = 0,
-                width = config.width,
-                height = config.height,
-                sourceWidth = displaySize.width,
-                sourceHeight = displaySize.height,
-            ),
-            encoder.inputSurface(),
-        )
-        val videoStream = VideoStreamPump(
-            encoder = encoder,
-            initialConfig = config,
-            writeFrame = frameWriter::writeFrame,
-        )
-        videoStream.start()
-        require(videoStream.awaitFirstFrame()) { "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout." }
-        val inputInjector = inputInjectorFactory(InputDisplayBounds(displaySize.width, displaySize.height))
-        val dispatcher = ControlFrameDispatcher(
-            bounds = InputDisplayBounds(config.width, config.height),
-            inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
-            inputInjector = inputInjector,
-            reconfigureVideo = { nextConfig ->
-                encoder.reconfigure(nextConfig)
-                videoStream.updateConfig(nextConfig)
-            },
-        )
-        return ActiveSession(
-            captureSession = captureSession,
-            config = config,
-            dispatcher = dispatcher,
-            displaySize = displaySize,
-            inputInjector = inputInjector,
-            videoStream = videoStream,
-        )
+        logInfo("Starting capture ${config.width}x${config.height} from display $displaySize.")
+        var encoderStarted = false
+        var captureSession: CaptureSession? = null
+        var videoStream: VideoStreamPump? = null
+        var inputInjector: InputInjector? = null
+        try {
+            encoder.start(config)
+            encoderStarted = true
+            val startedCapture = captureBackend.start(
+                CaptureConfig(
+                    displayId = 0,
+                    width = config.width,
+                    height = config.height,
+                    sourceWidth = displaySize.width,
+                    sourceHeight = displaySize.height,
+                ),
+                encoder.inputSurface(),
+            )
+            captureSession = startedCapture
+            val startedStream = VideoStreamPump(
+                encoder = encoder,
+                initialConfig = config,
+                writeFrame = frameWriter::writeFrame,
+            )
+            videoStream = startedStream
+            startedStream.start()
+            require(startedStream.awaitFirstFrame(firstFrameTimeoutMs)) {
+                "MediaCodec did not emit VIDEO_CONFIG and VIDEO_FRAME before timeout."
+            }
+            val createdInputInjector = inputInjectorFactory(
+                InputDisplayBounds(displaySize.width, displaySize.height),
+            )
+            inputInjector = createdInputInjector
+            val dispatcher = ControlFrameDispatcher(
+                bounds = InputDisplayBounds(config.width, config.height),
+                inputBounds = InputDisplayBounds(displaySize.width, displaySize.height),
+                inputInjector = createdInputInjector,
+                reconfigureVideo = { nextConfig ->
+                    encoder.reconfigure(nextConfig)
+                    videoSettings = VideoSettings(
+                        bitrate = nextConfig.bitrate,
+                        fps = nextConfig.fps,
+                    )
+                    startedStream.updateConfig(nextConfig)
+                },
+            )
+            return ActiveSession(
+                captureSession = startedCapture,
+                dispatcher = dispatcher,
+                displaySize = displaySize,
+                inputInjector = createdInputInjector,
+                videoStream = startedStream,
+            )
+        } catch (error: Throwable) {
+            videoStream?.let { stream -> runCatching { stream.stop() } }
+            captureSession?.let { session -> runCatching { session.stop() } }
+            if (encoderStarted) {
+                runCatching { encoder.stop() }
+            }
+            (inputInjector as? Closeable)?.let { closeable ->
+                runCatching { closeable.close() }
+            }
+            throw error
+        }
     }
 
     private data class ActiveSession(
-        val captureSession: dev.droidwebscr.server.capture.CaptureSession,
-        val config: VideoEncoderConfig,
+        val captureSession: CaptureSession,
         val dispatcher: ControlFrameDispatcher,
         val displaySize: DisplaySize,
         val inputInjector: InputInjector,
         val videoStream: VideoStreamPump,
     ) {
         fun close(encoder: VideoEncoder) {
-            videoStream.stop()
-            runCatching { captureSession.stop() }
-            runCatching { encoder.stop() }
-            val closeableInput = inputInjector as? Closeable
-            if (closeableInput != null) {
-                runCatching { closeableInput.close() }
+            var interrupted = false
+            fun cleanup(closeResource: () -> Unit) {
+                try {
+                    closeResource()
+                } catch (error: Throwable) {
+                    if (error is InterruptedException) {
+                        interrupted = true
+                    }
+                }
+            }
+
+            cleanup(videoStream::stop)
+            cleanup(captureSession::stop)
+            cleanup(encoder::stop)
+            (inputInjector as? Closeable)?.let { closeable ->
+                cleanup(closeable::close)
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt()
             }
         }
     }
+
+    private data class VideoSettings(
+        val bitrate: Int,
+        val fps: Int,
+    )
 
     private companion object {
         const val TAG = "droid-webscr"

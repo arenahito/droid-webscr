@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 import packageJson from "../package.json" with { type: "json" };
-import { isDirectRun, startAgent, type AgentRuntime } from "./runtime.js";
+import {
+  isDirectRun,
+  registerRuntimeShutdown,
+  startAgent,
+  type AgentRuntime,
+  type RuntimeSignalSource,
+} from "./runtime.js";
 
 export interface CliIo {
   stderr(value: string): void;
@@ -9,6 +15,7 @@ export interface CliIo {
 
 export interface CliRuntime {
   readonly packageVersion?: string | undefined;
+  readonly signalSource?: RuntimeSignalSource | undefined;
   readonly startAgent?: (() => Promise<AgentRuntime>) | undefined;
   readonly stderr?: ((value: string) => void) | undefined;
   readonly stdout?: ((value: string) => void) | undefined;
@@ -21,7 +28,14 @@ export async function runCli(argv: readonly string[], runtime: CliRuntime = {}):
   const start = runtime.startAgent ?? startAgent;
 
   if (args.length === 0) {
-    await start();
+    const started = await start();
+    registerRuntimeShutdown(started, {
+      onError: (error) => {
+        io.stderr(`Failed to close droid-webscr: ${formatError(error)}\n`);
+        process.exitCode = 1;
+      },
+      signalSource: runtime.signalSource,
+    });
     return 0;
   }
 
@@ -58,6 +72,10 @@ function createCliIo(runtime: CliRuntime): CliIo {
     stderr: runtime.stderr ?? ((value) => process.stderr.write(value)),
     stdout: runtime.stdout ?? ((value) => process.stdout.write(value)),
   };
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 if (isDirectRun(import.meta.url, process.argv)) {

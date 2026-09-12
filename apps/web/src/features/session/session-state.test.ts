@@ -1,57 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { reduceSessionState } from "./session-state.js";
+import { reduceSessionState, SessionState } from "./session-state.js";
 
 describe("session state", () => {
   it("tracks start stop and error transitions without losing selected device", () => {
-    const selected = reduceSessionState(
-      { logs: [], phase: "idle", selectedSerial: undefined, session: undefined },
-      { serial: "emulator-5554", type: "select-device" },
-    );
+    const initial: SessionState = {
+      phase: "idle",
+      selectedSerial: undefined,
+      session: undefined,
+    };
+    const selected = reduceSessionState(initial, {
+      serial: "emulator-5554",
+      type: "select-device",
+    });
     const starting = reduceSessionState(selected, { type: "start-requested" });
     const connected = reduceSessionState(starting, {
       session: { sessionId: "s1", serial: "emulator-5554", token: "t1" },
       type: "start-succeeded",
     });
     const failed = reduceSessionState(connected, { message: "socket closed", type: "failed" });
-    const logged = reduceSessionState(connected, {
-      message: "Decode pressure detected",
-      type: "log",
-    });
     const stopped = reduceSessionState(failed, { type: "stop" });
 
     expect(starting.phase).toBe("starting");
     expect(connected.session?.sessionId).toBe("s1");
-    expect(failed.logs.at(-1)).toBe("socket closed");
-    expect(logged.phase).toBe("connected");
-    expect(logged.logs.at(-1)).toBe("Decode pressure detected");
+    expect(connected).not.toHaveProperty("logs");
+    expect(failed).not.toHaveProperty("logs");
     expect(stopped).toMatchObject({ phase: "idle", selectedSerial: "emulator-5554" });
-  });
-
-  it("maps typed error domains to stable user-facing log text", () => {
-    const failed = reduceSessionState(
-      { logs: [], phase: "connected", selectedSerial: "emulator-5554", session: undefined },
-      { domain: "security", message: "Invalid origin", type: "failed" },
-    );
-
-    expect(failed.phase).toBe("error");
-    expect(failed.logs).toEqual(["Security error: Invalid origin"]);
-  });
-
-  it("clears logs and leaves unknown errors unprefixed", () => {
-    const state = {
-      logs: ["old"],
-      phase: "connected" as const,
-      selectedSerial: "s1",
-      session: undefined,
-    };
-
-    expect(reduceSessionState(state, { type: "clear-logs" }).logs).toEqual([]);
-    expect(
-      reduceSessionState(state, {
-        domain: "unknown",
-        message: "Unexpected close",
-        type: "failed",
-      }).logs.at(-1),
-    ).toBe("Unexpected close");
   });
 });

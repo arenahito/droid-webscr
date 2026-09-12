@@ -222,12 +222,15 @@ async function runAndCollect(command: string, args: readonly string[]): Promise<
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  const stdout = await collect(child.stdout ?? Readable.from([]));
-  const stderr = await collect(child.stderr ?? Readable.from([]));
-  const code = await new Promise<number>((resolve, reject) => {
+  const exit = new Promise<number>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (exitCode: number | null) => resolve(exitCode ?? 1));
   });
+  const [stdout, stderr, code] = await Promise.all([
+    collect(child.stdout ?? Readable.from([])),
+    collect(child.stderr ?? Readable.from([])),
+    exit,
+  ]);
   if (code !== 0) {
     throw new Error(stderr || `${command} ${args.join(" ")} failed with exit code ${code}`);
   }
@@ -281,8 +284,8 @@ async function startLogcatTail(command: string, serial: string): Promise<AdbLogT
 
 async function* splitLines(stream: AsyncIterable<Buffer | string>): AsyncIterable<string> {
   let pending = "";
-  for await (const chunk of stream) {
-    pending += String(chunk);
+  for await (const chunk of decodeUtf8(stream)) {
+    pending += chunk;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
     for (const line of lines) {
@@ -301,11 +304,33 @@ function isLogcatDataLine(line: string): boolean {
 }
 
 async function collect(stream: AsyncIterable<Buffer | string>): Promise<string> {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(String(chunk));
+  let output = "";
+  for await (const chunk of decodeUtf8(stream)) {
+    output += chunk;
   }
-  return chunks.join("");
+  return output;
+}
+
+async function* decodeUtf8(stream: AsyncIterable<Buffer | string>): AsyncIterable<string> {
+  const decoder = new TextDecoder();
+  for await (const chunk of stream) {
+    if (typeof chunk === "string") {
+      const pending = decoder.decode();
+      if (pending) {
+        yield pending;
+      }
+      yield chunk;
+      continue;
+    }
+    const decoded = decoder.decode(chunk, { stream: true });
+    if (decoded) {
+      yield decoded;
+    }
+  }
+  const pending = decoder.decode();
+  if (pending) {
+    yield pending;
+  }
 }
 
 async function reserveTcpPort(): Promise<number> {

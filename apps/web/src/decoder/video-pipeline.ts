@@ -58,6 +58,7 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
   let videoSize: { readonly height: number; readonly width: number } | undefined;
   let decoder: VideoDecoderAdapter | undefined;
   let annexBCodecConfig: Uint8Array | undefined;
+  let closed = false;
 
   const getDecoder = (): VideoDecoderAdapter | undefined => {
     if (decoder) {
@@ -89,6 +90,9 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
 
   return {
     acceptFrame: async (bytes) => {
+      if (closed) {
+        return snapshot();
+      }
       const decoded = decodeFrame(bytes);
       if (!decoded.ok) {
         status = "error";
@@ -121,6 +125,9 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
               width: config.codedWidth,
             }),
           });
+          if (closed) {
+            return snapshot();
+          }
           configured = true;
           videoSize = { height: config.codedHeight, width: config.codedWidth };
           options.onVideoConfig?.(videoSize);
@@ -157,16 +164,28 @@ export function createVideoPipeline(options: VideoPipelineOptions): VideoPipelin
           pressure = activeDecoder.decodeQueueSize >= maxDecodeQueueSize;
         }
       } catch (error) {
+        if (closed) {
+          return snapshot();
+        }
         status = "error";
         lastError = error instanceof Error ? error.message : "Video pipeline failed.";
       }
       return snapshot();
     },
     close: () => {
-      decoder?.close();
+      if (closed) {
+        return;
+      }
+      closed = true;
+      const activeDecoder = decoder;
+      decoder = undefined;
       status = "closed";
+      activeDecoder?.close();
     },
     reset: () => {
+      if (closed) {
+        return;
+      }
       decoder?.reset();
       configured = false;
       pressure = false;

@@ -1,6 +1,7 @@
 import { AdbProvider, SystemAdbProvider } from "@droid-webscr/adb";
 import { AgentConfig, defaultAgentConfig } from "@droid-webscr/config";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type DeviceServerArtifact,
   resolveDeviceServerArtifact,
@@ -17,6 +18,18 @@ export interface AgentRuntime {
   readonly url: string;
 }
 
+export type RuntimeSignal = "SIGINT" | "SIGTERM";
+
+export interface RuntimeSignalSource {
+  off(signal: RuntimeSignal, listener: () => void | Promise<void>): unknown;
+  once(signal: RuntimeSignal, listener: () => void | Promise<void>): unknown;
+}
+
+export interface RuntimeShutdownOptions {
+  readonly onError: (error: unknown) => void;
+  readonly signalSource?: RuntimeSignalSource | undefined;
+}
+
 export interface StartAgentOptions {
   readonly adbProvider?: AdbProvider | undefined;
   readonly config?: AgentConfig | undefined;
@@ -30,9 +43,10 @@ export async function startAgent(options: StartAgentOptions = {}) {
   /* v8 ignore next -- default config is reserved for the real CLI startup path. */
   let runtimeConfig = options.config ?? defaultAgentConfig;
   let currentApp: AgentFastifyApp | undefined;
+  let closePromise: Promise<void> | undefined;
   let rebindQueue = Promise.resolve();
   const closingPorts = new Map<number, Promise<void>>();
-  const resolvedArtifact = options.deviceServerArtifact ?? (await resolveDeviceServerArtifact());
+  let resolvedArtifact: DeviceServerArtifact;
 
   const createRuntimeApp = (agentConfig: AgentConfig) =>
     createFastifyApp({
@@ -85,21 +99,62 @@ export async function startAgent(options: StartAgentOptions = {}) {
     return queued;
   }
 
-  currentApp = await createRuntimeApp(runtimeConfig);
-  await currentApp.listen({ host: runtimeConfig.bindHost, port: runtimeConfig.port });
+  try {
+    resolvedArtifact = options.deviceServerArtifact ?? (await resolveDeviceServerArtifact());
+    currentApp = await createRuntimeApp(runtimeConfig);
+    await currentApp.listen({ host: runtimeConfig.bindHost, port: runtimeConfig.port });
+  } catch (error) {
+    try {
+      await currentApp?.close();
+    } finally {
+      await options.webUi?.close?.();
+    }
+    throw error;
+  }
   runtimeConfig = { ...runtimeConfig, port: readBoundPort(currentApp, runtimeConfig.port) };
   return {
-    close: async () => {
-      await rebindQueue;
-      await currentApp?.closeActiveDeviceSessions({ waitForStartup: true });
-      await currentApp?.close();
-      await Promise.all(closingPorts.values());
-      currentApp = undefined;
+    close: () => {
+      closePromise ??= (async () => {
+        try {
+          await rebindQueue;
+          await currentApp?.closeActiveDeviceSessions({ waitForStartup: true });
+          await currentApp?.close();
+          await Promise.all(closingPorts.values());
+        } finally {
+          currentApp = undefined;
+          await options.webUi?.close?.();
+        }
+      })();
+      return closePromise;
     },
     get url() {
       return createRuntimeUrl(runtimeConfig.bindHost, runtimeConfig.port);
     },
   } satisfies AgentRuntime;
+}
+
+export function registerRuntimeShutdown(
+  runtime: AgentRuntime,
+  options: RuntimeShutdownOptions,
+): void {
+  const signalSource = options.signalSource ?? process;
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = () => {
+    shutdownPromise ??= (async () => {
+      try {
+        await runtime.close();
+      } catch (error) {
+        options.onError(error);
+      } finally {
+        signalSource.off("SIGINT", shutdown);
+        signalSource.off("SIGTERM", shutdown);
+      }
+    })();
+    return shutdownPromise;
+  };
+
+  signalSource.once("SIGINT", shutdown);
+  signalSource.once("SIGTERM", shutdown);
 }
 
 export function createRuntimeUrl(bindHost: string, port: number): string {
@@ -110,7 +165,18 @@ export function createRuntimeUrl(bindHost: string, port: number): string {
 
 export function isDirectRun(moduleUrl: string, argv: readonly string[]): boolean {
   const entrypoint = argv[1];
-  return entrypoint !== undefined && pathToFileURL(entrypoint).href === moduleUrl;
+  if (entrypoint === undefined) {
+    return false;
+  }
+  if (pathToFileURL(entrypoint).href === moduleUrl) {
+    return true;
+  }
+
+  try {
+    return realpathSync.native(entrypoint) === realpathSync.native(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
 }
 
 async function listenWithRetry(

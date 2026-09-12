@@ -28,7 +28,6 @@ import {
   createFrameHeader,
   createKeyControlFrame,
   createScrollControlFrame,
-  decodeFrame,
   createSystemControlFrame,
   createVideoReconfigureFrame,
   encodeFrame,
@@ -70,7 +69,6 @@ const deviceLogFlushIntervalMs = 500;
 export interface DroidWebscrAppProps {
   readonly client?: AgentClient | undefined;
   readonly initialAgentConfig?: InitialAgentConfig | undefined;
-  readonly initialLogs?: readonly string[] | undefined;
   readonly sessionSocketFactory?: ((session: SessionRecord) => SessionSocket) | undefined;
   readonly videoPipelineFactory?:
     | ((canvas: HTMLCanvasElement, onError: (message: string) => void) => VideoPipeline)
@@ -117,7 +115,6 @@ interface PinchOverlayState {
 }
 
 const defaultSessionState: SessionState = {
-  logs: [],
   phase: "idle",
   selectedSerial: undefined,
   session: undefined,
@@ -142,20 +139,12 @@ const syntheticPinchStartThresholdPx = 0;
 const androidMenuKeyCode = 82;
 const maxAndroidKeyCode = 65_535;
 
-const designInitialLogs: readonly string[] = [
-  "10:42:10.231 INFO   stream     Starting stream: 1344x2992@30fps bitrate=4Mbps transport=USB",
-  "10:42:10.448 INFO   control    Input channel established",
-  "10:42:11.004 WARN   encoder    Bitrate pressure detected; holding 4Mbps",
-  "10:42:12.773 INFO   clipboard  Clipboard sync disabled",
-  "10:42:14.092 INFO   session    Agent ready",
-];
 const agentEndpointStorageKey = "droid-webscr.agentEndpoint";
 const initialAgentConfigKey = "__DROID_WEBSCR_CONFIG__";
 
 export function DroidWebscrApp({
   client,
   initialAgentConfig = readInitialAgentConfig(),
-  initialLogs = designInitialLogs,
   sessionSocketFactory,
   videoPipelineFactory = createDefaultVideoPipeline,
   storage = browserStorage(),
@@ -195,10 +184,7 @@ export function DroidWebscrApp({
   const [deviceLogEnabled, setDeviceLogEnabled] = React.useState(false);
   const [deviceLogs, setDeviceLogs] = React.useState<readonly string[]>([]);
   const [deviceLogStatus, setDeviceLogStatus] = React.useState<DeviceLogStatus>("idle");
-  const [state, dispatch] = React.useReducer(reduceSessionState, {
-    ...defaultSessionState,
-    logs: initialLogs,
-  });
+  const [state, dispatch] = React.useReducer(reduceSessionState, defaultSessionState);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const textInputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const sessionSocketRef = React.useRef<SessionSocket | undefined>(undefined);
@@ -463,9 +449,9 @@ export function DroidWebscrApp({
       setControlReady(false);
       videoPipelineRef.current = undefined;
       if (options.closeSocket) {
-        socket?.close();
+        closeSessionResource(socket);
       }
-      pipeline?.close();
+      closeSessionResource(pipeline);
       clearCanvas(canvasRef.current);
       setVideoSnapshot(undefined);
       captureGenerationRef.current += 1;
@@ -489,6 +475,7 @@ export function DroidWebscrApp({
         return;
       }
       setControlReady(false);
+      setRotation(0);
       dispatch({ serial, type: "select-device" });
       dispatch({ type: "start-requested" });
       try {
@@ -506,13 +493,7 @@ export function DroidWebscrApp({
           });
           videoPipelineRef.current = pipeline;
           socket.onFrame((frame) => {
-            const decoded = decodeFrame(frame);
-            if (
-              decoded.ok &&
-              decoded.value.header.type === MessageType.LogRecord &&
-              decoded.value.header.streamId === StreamId.Log
-            ) {
-              dispatch({ message: new TextDecoder().decode(decoded.value.payload), type: "log" });
+            if (sessionSocketRef.current !== socket || videoPipelineRef.current !== pipeline) {
               return;
             }
             void pipeline.acceptFrame(frame).then((snapshot) => {
@@ -520,12 +501,6 @@ export function DroidWebscrApp({
                 return;
               }
               setVideoSnapshot(snapshot);
-              if (snapshot.pressure) {
-                dispatch({ message: "Decode pressure detected", type: "log" });
-              }
-              if (snapshot.lastError) {
-                dispatch({ message: `ERROR ${snapshot.lastError}`, type: "log" });
-              }
             });
           });
         }
@@ -698,7 +673,6 @@ export function DroidWebscrApp({
           sequence: nextSequence(sequenceRef),
         }),
       );
-      dispatch({ message: `INFO Video ${nextBitrate} Mbps ${nextFps} FPS`, type: "log" });
     },
     [sendControlFrame],
   );
@@ -1229,8 +1203,8 @@ export function DroidWebscrApp({
       sessionSocketRef.current = undefined;
       setControlReady(false);
       videoPipelineRef.current = undefined;
-      socket?.close();
-      pipeline?.close();
+      closeSessionResource(socket);
+      closeSessionResource(pipeline);
       clearCanvas(canvasRef.current);
     },
     [setControlReady],
@@ -1869,6 +1843,14 @@ function clearCanvas(canvas: HTMLCanvasElement | null): void {
   }
   const width = canvas.width;
   canvas.width = width;
+}
+
+function closeSessionResource(resource: { close(): void } | undefined): void {
+  try {
+    resource?.close();
+  } catch {
+    return;
+  }
 }
 
 function resolvePointerSlot(

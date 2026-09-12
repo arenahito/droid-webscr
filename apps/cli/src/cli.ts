@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
-import type { AgentRuntime } from "@droid-webscr/agent";
+import {
+  registerRuntimeShutdown,
+  type AgentRuntime,
+  type RuntimeSignalSource,
+} from "@droid-webscr/agent";
 
 export interface RuntimeStartOptions {
   readonly authToken: string;
@@ -14,6 +18,7 @@ export interface WebUiStartOptions extends RuntimeStartOptions {
 export interface CliRuntime {
   readonly createAuthToken?: (() => string) | undefined;
   readonly packageVersion?: string | undefined;
+  readonly signalSource?: RuntimeSignalSource | undefined;
   readonly startRuntime?: ((options: RuntimeStartOptions) => Promise<AgentRuntime>) | undefined;
   readonly startWebUi?: ((options: WebUiStartOptions) => Promise<AgentRuntime>) | undefined;
   readonly stderr?: ((value: string) => void) | undefined;
@@ -69,6 +74,7 @@ export async function runCli(argv: readonly string[], runtime: CliRuntime = {}):
       authToken: parsed.value.authToken,
       webUiUrl: started.url,
     });
+    registerShutdown(started, runtime.signalSource, io.stderr);
     return 0;
   }
 
@@ -86,6 +92,7 @@ export async function runCli(argv: readonly string[], runtime: CliRuntime = {}):
     authToken: parsed.value.authToken,
     webUiUrl: started.url,
   });
+  registerShutdown(started, runtime.signalSource, io.stderr);
   return 0;
 }
 
@@ -235,4 +242,22 @@ function createCliIo(runtime: CliRuntime): {
     stderr: runtime.stderr ?? ((value) => process.stderr.write(value)),
     stdout: runtime.stdout ?? ((value) => process.stdout.write(value)),
   };
+}
+
+function registerShutdown(
+  runtime: AgentRuntime,
+  signalSource: RuntimeSignalSource | undefined,
+  stderr: (value: string) => void,
+): void {
+  registerRuntimeShutdown(runtime, {
+    onError: (error) => {
+      stderr(`Failed to close droid-webscr: ${formatError(error)}\n`);
+      process.exitCode = 1;
+    },
+    signalSource,
+  });
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
